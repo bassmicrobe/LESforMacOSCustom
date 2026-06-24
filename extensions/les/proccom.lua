@@ -88,9 +88,13 @@ local liveAppCache = { app = nil, timestamp = 0, TTL = 2 }
 
 ---@return userdata|nil  hs.application object for Live, or nil
 function getLiveHsAppObj()
-  -- Return cached result if still valid
+  -- Return cached result if still valid. Note the timestamp>0 guard (instead of
+  -- testing liveAppCache.app): this also memoizes a NEGATIVE result (Live not
+  -- running) for the TTL, so a not-found state no longer re-runs the expensive
+  -- hs.application.find() on every keystroke/timer tick. Focus changes call
+  -- invalidateLiveAppCache() (timestamp=0), forcing a fresh lookup when needed.
   local now = hs.timer.secondsSinceEpoch()
-  if liveAppCache.app and (now - liveAppCache.timestamp) < liveAppCache.TTL then
+  if liveAppCache.timestamp > 0 and (now - liveAppCache.timestamp) < liveAppCache.TTL then
     return liveAppCache.app
   end
 
@@ -157,7 +161,10 @@ function getValidTitles()
     end
   end
 
-  local menuTable = getLiveHsAppObj():getMenuItems()
+  local app = getLiveHsAppObj()
+  if app == nil then return {} end
+  local menuTable = app:getMenuItems()
+  if type(menuTable) ~= "table" then return {} end
   local titleTable = {}
   for key, val in pairs(menuTable) do
     if type(val) == "table" then
@@ -203,16 +210,18 @@ function _selectLiveMenuItem(menuItem)
   if gValidTitleTable == nil then return false end
 
   local hsobj = getLiveHsAppObj()
+  if hsobj == nil then return false end
   if hsobj:findMenuItem(menuItem) ~= nil then
     hsobj:selectMenuItem(menuItem)
     return true
   else
     local tipValue = strSanitize(getTipValue(menuItem))
+    local tipLower = tipValue:lower()  -- hoist out of the loop
 
     -- Check through the valid entries table
     for _, val in pairs(gValidTitleTable) do
       -- Convert all to lowercase before checking
-      if val:lower():find(tipValue:lower()) then
+      if val:lower():find(tipLower) then
         if hsobj:findMenuItem(val) ~= nil then
           -- selectMenuItem _is_ case sensitive so we must
           -- pass the value as defined in the table

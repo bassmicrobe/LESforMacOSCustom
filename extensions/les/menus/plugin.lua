@@ -46,7 +46,11 @@ end
 
 function buildPluginMenu()
 
-    local file = io.open("menuconfig.ini", "r")
+    -- Use the canonical absolute path (under ~/.les). The old bare relative
+    -- "menuconfig.ini" resolved against the process CWD, which for a bundled
+    -- Hammerspoon app is "/", leaving the plugin menu empty even though the
+    -- file exists. This matches testmenuconfig() / the GUI / the scanner.
+    local file = io.open(GetDataPath("menuconfig.ini"), "r")
     if file == nil then
         print("buildPluginMenu(): menuconfig.ini not found")
         return
@@ -98,8 +102,9 @@ function buildPluginMenu()
 
     for i = arrLen, 1, -1
     do
-        arr[i] = sgsub(arr[i], "\xe2\x80\x9c", "\"")
-        if arr[i] == "\xe2\x80\x94\r" or arr[i] == "-\n" or arr[i] == "\xe2\x80\x94" then
+        arr[i] = sgsub(arr[i], "\xe2\x80\x9c", "\"")  -- left curly double-quote U+201C
+        arr[i] = sgsub(arr[i], "\xe2\x80\x9d", "\"")  -- right curly double-quote U+201D
+        if arr[i] == "\xe2\x80\x94\r" or arr[i] == "-\n" or arr[i] == "-\r" or arr[i] == "\xe2\x80\x94" then
             arr[i] = "--"
             tinsert(arr, i, "--")
         elseif slen(arr[i]) < 2 and not smatch(arr[i], "%w") then
@@ -162,7 +167,10 @@ function buildPluginMenu()
             tremove(arr, i)
         elseif sfind(firstTwo, "%.%.") then
             subfoldername = subfolderhistory[subfolderval]
-            subfolderval = subfolderval - 1
+            -- Floor at 0: more ".." pops than depth must not drive the level
+            -- negative (which would later yield sub(1,1)="-" -> tonumber=nil and
+            -- abort the whole menu build on a nil comparison).
+            subfolderval = math.max(0, subfolderval - 1)
         elseif sfind(line, "/nocategory") then
             subfolderval = 0
             tremove(arr, i)
@@ -239,10 +247,18 @@ function buildPluginMenu()
         end
 
         local level = tonumber(string.sub(pluginArray[i], 1, 1))
+        if level == nil then goto pls end  -- malformed/over-popped entry; skip rather than crash on a nil comparison
 
         local thisIndex = mysplit(pluginArray[i])
         local nextIndex = mysplit(pluginArray[i + 1])
         local categoryName = RemoveSlashes(thisIndex[2], level)
+        -- Never let a category alias the global root ("menu") — that would build
+        -- a self-referential menu table (infinite recursion when traversed) —
+        -- and never leave an empty bucket name.
+        categoryName = categoryName:gsub("^%s*(.-)%s*$", "%1")
+        if categoryName == "" or categoryName == "menu" then
+            categoryName = "_cat_" .. i
+        end
 
         -- RUNS RIGHT AT THE START IF A PLUGIN IS INSERTED FIRST IN THE MENU
         if i == 1 and level == 0 then
@@ -364,17 +380,16 @@ function buildPluginMenu()
             if string.find(string.sub(pluginArray[i], 1, 2), "%-%-") or
                 string.find(string.sub(pluginArray[i], 1, 2), "\xe2\x80\x94") then
                 table.insert(getCat(categoryName), {title = "-"})
-            else
-                if string.find(nextIndex[3], "❗️") then
-                    table.insert(getCat(categoryName), {}) -- inserts plugin
-                else
-                    table.insert(getCat(categoryName), {
-                        title = string.sub(thisIndex[3], 2),
-                        fn = function()
-                            loadPlugin(nextIndex[3])
-                        end
-                    }) -- inserts plugin
-                end
+            elseif not string.find(nextIndex[3], "❗️") then
+                -- A "❗️" row marks a folder (its sub-menu is created above); only
+                -- insert a real plugin entry, never a blank {} (which rendered as
+                -- an empty menu item).
+                table.insert(getCat(categoryName), {
+                    title = string.sub(thisIndex[3], 2),
+                    fn = function()
+                        loadPlugin(nextIndex[3])
+                    end
+                }) -- inserts plugin
             end
 
             -- Down scope
@@ -566,15 +581,19 @@ function rebuildRcMenu()
         pluginMenu:delete()
     end
     pluginMenu = hs.menubar.new()
-    pluginMenu:setMenu(menu)
-    pluginMenu:setTitle("LES")
-    pluginMenu:removeFromMenuBar()
+    if pluginMenu ~= nil then  -- nil when the status-item limit is hit
+        pluginMenu:setMenu(menu)
+        pluginMenu:setTitle("LES")
+        pluginMenu:removeFromMenuBar()
+    end
 
     if pianoMenu ~= nil then
         pianoMenu:delete()
     end
     pianoMenu = hs.menubar.new()
-    pianoMenu:setMenu(ShiftDoubleRightClickMenu)
-    pianoMenu:setTitle("Piano")
-    pianoMenu:removeFromMenuBar()
+    if pianoMenu ~= nil then
+        pianoMenu:setMenu(ShiftDoubleRightClickMenu)
+        pianoMenu:setTitle("Piano")
+        pianoMenu:removeFromMenuBar()
+    end
 end

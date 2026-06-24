@@ -187,12 +187,30 @@ end
 function scanner.saveCache(data)
     ShellCreateDirectory(ScriptUserResourcesPath)
     local path = cacheFilePath()
-    local json = hs.json.encode(data, true)
-    local f = io.open(path, "w")
-    if f then
-        f:write(json)
-        f:close()
+    -- Guard + atomic write, and DON'T fail silently: a swallowed write error
+    -- left scanned_at unpersisted, degrading every subsequent run to a full rescan.
+    local ok, json = pcall(hs.json.encode, data, true)
+    if not ok or type(json) ~= "string" then
+        print("[LES][scanner] saveCache: JSON encode failed; cache not written")
+        return false
     end
+    local tmp = path .. ".tmp"
+    local f = io.open(tmp, "w")
+    if not f then
+        print("[LES][scanner] saveCache: cannot open cache for write: " .. tostring(tmp))
+        return false
+    end
+    f:write(json)
+    if not f:close() then
+        os.remove(tmp)
+        print("[LES][scanner] saveCache: failed to finalize cache write")
+        return false
+    end
+    if not os.rename(tmp, path) then
+        os.remove(tmp)
+        return false
+    end
+    return true
 end
 
 -- ═══════════════════════════════════════════════════════════════════════

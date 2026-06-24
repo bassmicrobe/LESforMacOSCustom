@@ -20,8 +20,19 @@ local settingsUC = nil
 local pendingReloadTimer = nil
 
 local function sLog(msg)
-    local f = io.open(ScriptUserPath .. "/debug.log", "a")
-    if f then f:write(os.date("[%H:%M:%S][settingsgui] ") .. tostring(msg) .. "\n"); f:close() end
+    -- Only log in debug mode (avoids unbounded debug.log growth). Secure the
+    -- file to 600 on creation: it lives in ~/.les alongside the API key and the
+    -- default umask would otherwise leave it group/other-readable.
+    if _G.enabledebug ~= 1 then return end
+    local path = ScriptUserPath .. "/debug.log"
+    local pre = io.open(path, "r")
+    local existed = pre ~= nil
+    if pre then pre:close() end
+    local f = io.open(path, "a")
+    if not f then return end
+    f:write(os.date("[%H:%M:%S][settingsgui] ") .. tostring(msg) .. "\n")
+    f:close()
+    if not existed and type(SetSecureFileMode) == "function" then SetSecureFileMode(path) end
 end
 
 -- Distinct marker the GUI puts in the openaikey input when the user clicks '削除'.
@@ -354,7 +365,10 @@ local function decodeWebviewMessageBody(body)
         if ok and type(t) == "table" then
             return t
         end
-        print("[settingsgui] save: json decode failed, first 240 chars:", (body or ""):sub(1, 240))
+        -- Do NOT log the payload contents: the settings save body carries the
+        -- OpenAI API key. Log only the length for diagnostics.
+        print("[settingsgui] save: json decode failed (payload withheld, length="
+            .. tostring(#tostring(body or "")) .. ")")
         return nil
     end
     print("[settingsgui] save: unexpected message body type:", type(body))

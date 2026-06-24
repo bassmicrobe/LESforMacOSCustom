@@ -130,7 +130,13 @@ end
 local function notesJson(list)
     local parts = {}
     for _, n in ipairs(list or {}) do
-        parts[#parts + 1] = string.format('{"ts":%d,"body":%s}', n.ts, jsonStr(n.body or ""))
+        -- ts comes from an on-disk JSON file (untrusted boundary); coerce to an
+        -- integer so a fractional/string/nil value can never throw from %d and
+        -- brick the whole panel. Entries without a usable ts are skipped.
+        local ts = math.floor(tonumber(n.ts) or 0)
+        if ts > 0 then
+            parts[#parts + 1] = string.format('{"ts":%d,"body":%s}', ts, jsonStr(n.body or ""))
+        end
     end
     return "[" .. table.concat(parts, ",") .. "]"
 end
@@ -145,7 +151,17 @@ local function trackListJson(all)
 end
 
 local function escSQ(s)
-    return s:gsub("\\","\\\\"):gsub("'","\\'")
+    -- Escapes a value for embedding inside a single-quoted JS string literal.
+    -- In addition to \ and ', neutralize "<"/">" as \x3c/\x3e: these decode back
+    -- to "<"/">" when the JS string is parsed, but never present a literal
+    -- "</script>" to the HTML tokenizer (which would otherwise end an inline
+    -- <script> regardless of JS string context — a stored-XSS sink).
+    return (s or ""):gsub("\\","\\\\"):gsub("'","\\'"):gsub("<","\\x3c"):gsub(">","\\x3e")
+end
+
+-- Escape a value for safe use inside a double-quoted HTML attribute or HTML text.
+local function escAttr(s)
+    return (s or ""):gsub("&","&amp;"):gsub('"',"&quot;"):gsub("<","&lt;"):gsub(">","&gt;")
 end
 
 -- ── HTML ──────────────────────────────────────────────────────────────
@@ -153,7 +169,10 @@ end
 local function buildHTML(projectName, trackName, all)
     local displayProject = (projectName == "unsaved_project")
         and "未保存のプロジェクト" or (projectName or ""):gsub("_", " ")
-    local detectedVal = escSQ(trackName or "")
+    displayProject = escAttr(displayProject)
+    -- value="%s" is a double-quoted HTML attribute, so use HTML-attribute
+    -- escaping (not JS single-quote escaping) to prevent attribute breakout.
+    local detectedVal = escAttr(trackName or "")
     local notes = (trackName and all[trackName]) or {}
     local notesJ  = escSQ(notesJson(notes))
     local tracksJ = escSQ(trackListJson(all))
@@ -349,7 +368,10 @@ function openTrackNotes()
     _webview:level(hs.drawing.windowLevels.floating)
     _webview:allowTextEntry(true)
     _webview:html(buildHTML(project, _track, all))
-    _webview:windowCallback(function(_, action)
+    -- hs.webview:windowCallback passes the action string as the FIRST argument
+    -- (fn("closing", webview)). Binding it to the second slot made the guard
+    -- always-false, so cleanup never ran and the panel could not be reopened.
+    _webview:windowCallback(function(action)
         if action == "closing" then
             _webview  = nil
             _uc       = nil

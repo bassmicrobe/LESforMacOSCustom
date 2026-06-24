@@ -226,6 +226,15 @@ end
 local function handleSend(text)
     _messages[#_messages + 1] = { role = "user", content = text }
 
+    -- Cap retained history so each request doesn't grow without bound (rising
+    -- token cost and eventual context-length failures). Keep the most recent
+    -- MAX_HISTORY messages; the system prompt is always re-added in
+    -- buildSystemMessages() below.
+    local MAX_HISTORY = 20
+    while #_messages > MAX_HISTORY do
+        table.remove(_messages, 1)
+    end
+
     local apiMessages = buildSystemMessages()
     for _, m in ipairs(_messages) do
         apiMessages[#apiMessages + 1] = m

@@ -62,8 +62,8 @@ Happy producing.]],
     -- Accessibility permission
     accessibility_system_settings     = "System Settings > Privacy & Security > Accessibility",
     accessibility_system_preferences  = "System Preferences > Security & Privacy > Privacy > Accessibility",
-    -- %1=programName, %2=asyNavPath, %3=programName (unused)
-    accessibility_alert = "Please grant accessibility permissions by navigating to %s and enabling it for \"%s\".\n\nIf it isn't already present, please drag and drop the application to the allowlist.",
+    -- %1=programName, %2=asyNavPath (matches module.lua's format args)
+    accessibility_alert = "Please grant accessibility permissions for \"%s\" by navigating to %s and enabling it.\n\nIf it isn't already present, please drag and drop the application to the allowlist.",
 
     -- Version check
     -- %1=programName, %2=minVer, %3=maxVer, %4=curVer, %5=progName, %6=programBugTracker

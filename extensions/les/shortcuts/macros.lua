@@ -56,6 +56,13 @@ local down12, down22 = false, true
 local press12, press22
 local scaling = 0
 
+-- Cache hot-path keycodes / event types resolved once at load time, so the
+-- per-event eventtap callbacks below don't re-hash hs.keycodes.map on every
+-- keystroke and mouse click.
+local KEYCODE_B = hs.keycodes.map["B"]
+local KEYCODE_1 = hs.keycodes.map["1"]
+local EVT_LEFTMOUSEDOWN = hs.eventtap.event.types.leftMouseDown
+
 -- Pre-compute FabFilter scaling ratios as lookup table
 local FABFILTER_UNDO_FRACTIONS = {
     [string.format("%.4f", 2.0512820512821)] = 13 / 30,  -- mini
@@ -117,7 +124,10 @@ end
 
 local function handleEnvelopeMode(mods)
     if not mods.alt then return end
-    _G.dimensions = getLiveHsAppObj():mainWindow():frame()
+    local app = getLiveHsAppObj()
+    local mainwin = app and app:mainWindow()
+    if not mainwin then return end
+    _G.dimensions = mainwin:frame()
     local prepoint = hs.mouse.absolutePosition()
     prepoint["__luaSkinType"] = nil
 
@@ -141,7 +151,10 @@ local function handleSaveAsNewVersion(mods)
     if _G.debounce then return end
 
     _G.debounce = true
-    local mainwindowname = getLiveHsAppObj():mainWindow():title()
+    local app = getLiveHsAppObj()
+    local mainwin = app and app:mainWindow()
+    if not mainwin then _G.debounce = false; return end
+    local mainwindowname = mainwin:title() or ""
     local projectname = mainwindowname:gsub("%s%s%[.*", "")
     local newname
 
@@ -184,16 +197,20 @@ local function handleCloseWindow(mods)
     if not mods.cmd then return end
 
     if not mods.alt then
-        local mainwin = getLiveHsAppObj():mainWindow()
+        local app = getLiveHsAppObj()
+        local mainwin = app and app:mainWindow()
+        if not mainwin then return end
         local focused = hs.window.frontmostWindow()
-        if mainwin ~= focused then focused:close() end
+        if focused and mainwin ~= focused then focused:close() end
     end
 end
 
 --- Close all plugin windows (not the main window).
 local function closeAllPluginWindows()
-    local allwindows = getLiveHsAppObj():allWindows()
-    local mainwin = getLiveHsAppObj():mainWindow()
+    local app = getLiveHsAppObj()
+    if not app then return end
+    local allwindows = app:allWindows()
+    local mainwin = app:mainWindow()
     for i = 1, #allwindows do
         if allwindows[i] ~= mainwin then allwindows[i]:close() end
     end
@@ -208,7 +225,10 @@ end
 
 local function handleCloseAllEscape(mods)
     if _G.enableclosewindow == 0 then return end
-    if mods.cmd then
+    -- Require Cmd+Alt (matches the W-key handleCloseAllWindows). The old
+    -- Cmd-only trigger mass-closed every plugin editor on an easily-hit chord
+    -- with no confirmation — an unintended asymmetry with the W path.
+    if mods.cmd and mods.alt then
         closeAllPluginWindows()
     end
 end
@@ -248,7 +268,15 @@ end
 local function handleAbsoluteReplace(mods, eventtype)
     if _G.absolutereplace == 0 then return end
     if eventtype ~= hs.eventtap.event.types.keyUp then return end
-    if mods.alt and mods.cmd then
+    -- Honor ctrlabsoluteduplicate exactly like handleAbsoluteDuplicate so the
+    -- two halves of the same feature use a consistent chord (Ctrl+Cmd vs Alt+Cmd).
+    local match
+    if ctrlabsoluteduplicate == 1 then
+        match = mods.ctrl and mods.cmd
+    else
+        match = mods.alt and mods.cmd
+    end
+    if match then
         selectLiveMenuItem("Paste")
         selectLiveMenuItem("Delete")
         selectLiveMenuItem("Paste")
@@ -355,8 +383,8 @@ _G.quickmacro = hs.eventtap.new({
     local eventtype = event:getType()
 
     -- Reset buplicate state on non-B key or mouse click
-    if keycode ~= hs.keycodes.map["B"] or
-        (eventtype == hs.eventtap.event.types.leftMouseDown and buplicatelastshortcut == 1) then
+    if keycode ~= KEYCODE_B or
+        (eventtype == EVT_LEFTMOUSEDOWN and buplicatelastshortcut == 1) then
         buplicatelastshortcut = 0
     end
 
@@ -381,7 +409,7 @@ _G.pausebutton = hs.eventtap.new({hs.eventtap.event.types.keyDown, hs.eventtap.e
     local keycode = event:getKeyCode()
     local eventtype = event:getType()
 
-    if keycode == hs.keycodes.map["1"] and eventtype == hs.eventtap.event.types.keyDown then
+    if keycode == KEYCODE_1 and eventtype == hs.eventtap.event.types.keyDown then
         local mods = hs.eventtap.checkKeyboardModifiers()
         if mods.cmd and mods.shift then
             if threadsenabled == true then

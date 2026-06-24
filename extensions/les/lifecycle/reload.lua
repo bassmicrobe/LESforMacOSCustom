@@ -18,12 +18,13 @@ function cheatmenu()
         L("btn_ok"),
         L("btn_cancel")
     )
+    enteredcheat = enteredcheat or ""  -- textPrompt can return nil for the value
     enteredcheat = enteredcheat:gsub([[.*(.*)%(%"]], "%1")
     enteredcheat = enteredcheat:gsub([[(.*)%".*]], "%1")
     enteredcheat = enteredcheat:lower()
     if button == L("btn_cancel") then
         return false
-    elseif button == "Ok" then
+    elseif button == L("btn_ok") then
         if enteredcheat == "" then
             return false
         elseif enteredcheat == "gaster" then
@@ -33,22 +34,31 @@ function cheatmenu()
                 programName,
                 [[Doing this will exit your current project without saving. Are you sure?]]
             ) == true then
-                getLiveHsAppObj():kill()
+                local liveApp = getLiveHsAppObj()
+                if liveApp then liveApp:kill() end
+                if type(invalidateLiveAppCache) == "function" then invalidateLiveAppCache() end
                 hs.eventtap.keyStroke({"shift"}, "D", 0)
-                while true do
-                    if getLiveHsAppObj() == nil then
-                        break
-                    else
-                        astSleep(1)
-                    end
-                end
-                print("live is closed")
-                ShellCreateDirectory(strJoinPaths(ScriptUserResourcesPath, "als Lessons"))
-                ShellCopy(strJoinPaths(BundleResourceAssetsPath, strJoinPaths("als Lessons", "lessonsEN.txt")), strJoinPaths(ScriptUserResourcesPath, "als Lessons"))
-                ShellCopy(strJoinPaths(BundleResourceAssetsPath, "als.als"), ScriptUserResourcesPath)
-                print("done cloning project")
-                hs.osascript.applescript([[delay 2
+                -- Non-blocking wait for Live to close. The old `while true do
+                -- astSleep(1) end` froze the entire app ~1s/iteration and hung
+                -- forever if the process became a zombie. Bounded to ~10s.
+                local elapsed = 0
+                hs.timer.waitUntil(
+                    function()
+                        elapsed = elapsed + 0.5
+                        if type(invalidateLiveAppCache) == "function" then invalidateLiveAppCache() end
+                        return getLiveHsAppObj() == nil or elapsed >= 10
+                    end,
+                    function()
+                        print("live is closed")
+                        ShellCreateDirectory(strJoinPaths(ScriptUserResourcesPath, "als Lessons"))
+                        ShellCopy(strJoinPaths(BundleResourceAssetsPath, strJoinPaths("als Lessons", "lessonsEN.txt")), strJoinPaths(ScriptUserResourcesPath, "als Lessons"))
+                        ShellCopy(strJoinPaths(BundleResourceAssetsPath, "als.als"), ScriptUserResourcesPath)
+                        print("done cloning project")
+                        hs.osascript.applescript([[delay 2
           tell application "Finder" to open POSIX file "]] .. GetDataPath([[resources/als.als"]]))
+                    end,
+                    0.5
+                )
                 return true
             end
 
@@ -176,6 +186,11 @@ function reloadLES()
     if _G.launchwithlive == 1 then
         print("launchwithlive = true")
         local scriptPath = BundleResourcePath .. "/assets/watch_live_launch.sh"
+        -- XML-escape the path before embedding it in the plist <string>; an
+        -- install path containing &, <, or > would otherwise corrupt the plist.
+        local function xmlEscape(s)
+            return (s or ""):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+        end
         -- Generate plist with the correct script path
         local plistContent = table.concat({
             [[<?xml version="1.0" encoding="UTF-8"?>]],
@@ -187,7 +202,7 @@ function reloadLES()
             [[	<key>ProgramArguments</key>]],
             [[	<array>]],
             [[		<string>/bin/bash</string>]],
-            [[		<string>]] .. scriptPath .. [[</string>]],
+            [[		<string>]] .. xmlEscape(scriptPath) .. [[</string>]],
             [[	</array>]],
             [[	<key>RunAtLoad</key>]],
             [[	<true/>]],
@@ -205,9 +220,14 @@ function reloadLES()
         local f = io.open(watchPlistDest, "w")
         if f then
             f:write(plistContent)
-            f:close()
+            if f:close() then
+                os.execute("launchctl load " .. strQuote(watchPlistDest) .. " 2>/dev/null")
+            else
+                print("[LES] failed to finalize watch-live LaunchAgent plist; not loading")
+            end
+        else
+            print("[LES] failed to write watch-live LaunchAgent plist; not loading")
         end
-        os.execute("launchctl load " .. strQuote(watchPlistDest) .. " 2>/dev/null")
     else
         print("launchwithlive = false")
         os.execute("launchctl unload " .. strQuote(watchPlistDest) .. " 2>/dev/null")

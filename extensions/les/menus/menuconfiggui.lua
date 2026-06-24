@@ -17,12 +17,55 @@ end
 
 local function writeMenuConfig(content)
     local path = strJoinPaths(ScriptUserPath, "menuconfig.ini")
+
+    -- Back up the existing file BEFORE overwriting. The GUI parses a flattened
+    -- model and cannot represent nested //sub-categories or -- separators, so a
+    -- round-trip would otherwise irrecoverably destroy hand-authored structure.
+    -- Keep the 5 most recent backups.
+    if ioIsFilePresent(path) and type(ShellCopy) == "function" then
+        local backupPath = string.format("%s.%d.bak", path, math.floor(hs.timer.secondsSinceEpoch()))
+        ShellCopy(path, backupPath)
+        -- Index hs.fs inside the pcall closure so a missing hs.fs is caught.
+        local ok, iter = pcall(function() return hs.fs.dir(ScriptUserPath) end)
+        if ok and iter then
+            local baks = {}
+            for file in iter do
+                if type(file) == "string" and file:match("^menuconfig%.ini%.%d+%.bak$") then
+                    baks[#baks + 1] = file
+                end
+            end
+            table.sort(baks)
+            for i = 1, #baks - 5 do os.remove(strJoinPaths(ScriptUserPath, baks[i])) end
+        end
+    end
+
+    -- Atomic write with temp-file cleanup on any failure.
     local tmpPath = path .. ".tmp"
     local f = io.open(tmpPath, "w")
     if not f then return false end
     f:write(content)
-    f:close()
-    return os.rename(tmpPath, path) ~= nil
+    if not f:close() then
+        os.remove(tmpPath)
+        return false
+    end
+    if not os.rename(tmpPath, path) then
+        os.remove(tmpPath)
+        return false
+    end
+    return true
+end
+
+-- True if the config uses structure the flat GUI editor cannot represent
+-- (nested sub-categories, level pops, or separators). Used to warn the user
+-- that saving via the GUI will flatten these.
+local function hasUnsupportedStructure(text)
+    for line in ((text or "") .. "\n"):gmatch("([^\n]*)\n") do
+        local t = line:match("^%s*(.-)%s*$")
+        if t:sub(1, 2) == "//" or t == ".." or t == "--" or t == "—" then
+            return true
+        end
+    end
+    return false
 end
 
 -- ── Pure-Lua JSON serializer (avoids hs.json.encode) ─────────────────
@@ -157,7 +200,10 @@ local function parseMenuConfig(text)
     local comments    = {}
     local categories  = {}
     local nocategory  = {}
-    local currentCat  = nil   -- table or false (false = nocategory mode)
+    -- false = "no category yet / nocategory mode"; a table = current category.
+    -- Starting at false (not nil) ensures plugins listed before the first
+    -- header land in nocategory instead of being silently dropped.
+    local currentCat  = false
     local pendingName = nil
 
     for line in (text .. "\n"):gmatch("([^\n]*)\n") do
@@ -231,6 +277,12 @@ end
 local function escapeForJSSQ(s)
     s = s:gsub("\\", "\\\\")
     s = s:gsub("'",  "\\'")
+    -- Neutralize "<"/">" as \x3c/\x3e so an embedded "</script>" (e.g. from a
+    -- crafted VST3 bundle name or a hand-edited menuconfig.ini) cannot terminate
+    -- the inline <script> early (stored XSS). They decode back inside the JS
+    -- string literal, so JSON.parse still receives the original characters.
+    s = s:gsub("<", "\\x3c")
+    s = s:gsub(">", "\\x3e")
     return s
 end
 
@@ -438,7 +490,6 @@ function saveResult(ok,msg){
   t.textContent=msg;t.className=ok?'tok':'terr';
 }
 
-function escJ(s){return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\x27");}
 function openPicker(){
   if(sel<0)return;
   document.getElementById('pickerSearch').value='';
@@ -460,7 +511,7 @@ function renderPicker(q){
   if(!filtered.length){h='<div id="pickerNone">該当するプラグインがありません</div>';}
   else{filtered.forEach(function(p){
     var fmt=p.format==='Ableton'?'<span class="pi-fmt pi-fmt-ab">Ableton</span>':'<span class="pi-fmt pi-fmt-v3">VST3</span>';
-    h+='<div class="pi" onclick="addFromPicker(\''+escJ(p.name)+'\')">'+
+    h+='<div class="pi" data-name="'+escH(p.name)+'" onclick="addFromPicker(this.dataset.name)">'+
       '<span>'+escH(p.name)+'</span>'+
       '<span style="display:flex;align-items:center;flex-shrink:0">'+fmt+'<span class="pi-cat">'+escH(p.category||'')+'</span></span></div>';
   });}
@@ -529,6 +580,15 @@ function openMenuConfigGUI()
     local rawContent = readMenuConfig()
     local parsedData = parseMenuConfig(rawContent)
 
+    -- Warn if the file uses nested sub-categories / separators the flat editor
+    -- cannot represent: saving will flatten them. The original is auto-backed-up
+    -- in writeMenuConfig, but the user should know before editing.
+    if hasUnsupportedStructure(rawContent) and type(HSMakeAlert) == "function" then
+        HSMakeAlert(programName,
+            "このメニュー設定にはサブカテゴリ（//）や区切り線が含まれています。\nこのエディタはフラットな構造のみ編集でき、保存するとネストや区切りは失われます。\n（保存前に元のファイルは自動でバックアップされます）",
+            true, "warning")
+    end
+
     menuConfigUC = hs.webview.usercontent.new("lesMenuConfig")
     menuConfigUC:setCallback(function(msg)
         local bodyRaw = msg
@@ -561,16 +621,22 @@ function openMenuConfigGUI()
             local newData = {comments = comts, categories = cats, nocategory = nocat}
             local newContent = serializeMenuConfig(newData)
             local ok = writeMenuConfig(newContent)
-            pcall(buildPluginMenu)
-            pcall(rebuildRcMenu)
             local wv = menuConfigWebview
-            if wv then
-                if ok then
+            if ok then
+                -- Only rebuild the live menus AFTER edits are confirmed on disk,
+                -- otherwise a failed write would push the stale file into the menubar.
+                pcall(buildPluginMenu)
+                pcall(rebuildRcMenu)
+                if wv then
                     wv:evaluateJavaScript("saveResult(true,'保存しました')")
-                    hs.timer.doAfter(1.5, closeGui)
-                else
-                    wv:evaluateJavaScript("saveResult(false,'保存に失敗しました')")
+                    -- Only close if this same webview is still current (the user
+                    -- may have reopened the editor within the delay).
+                    hs.timer.doAfter(1.5, function()
+                        if menuConfigWebview == wv then closeGui() end
+                    end)
                 end
+            elseif wv then
+                wv:evaluateJavaScript("saveResult(false,'保存に失敗しました')")
             end
         elseif action == "cancel" then
             closeGui()
@@ -585,7 +651,8 @@ function openMenuConfigGUI()
     if menuConfigWebview == nil then return end
     menuConfigWebview:windowStyle({"titled", "closable", "resizable"})
     menuConfigWebview:windowTitle("プラグインメニュー設定 — Live Enhancement Suite Custom")
-    menuConfigWebview:windowCallback(function(_, evtAction)
+    -- hs.webview:windowCallback passes the action string FIRST (fn("closing", webview)).
+    menuConfigWebview:windowCallback(function(evtAction)
         if evtAction == "closing" then
             menuConfigWebview = nil
             menuConfigUC = nil

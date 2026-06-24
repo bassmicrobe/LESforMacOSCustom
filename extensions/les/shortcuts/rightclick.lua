@@ -145,8 +145,13 @@ function titlebarheight()
 end
 
 function bookmarkfunc() -- this allows you to use the bookmark click stuff.
+    -- Runs from a bare hs.timer.doAfter callback (NOT inside macros.lua's pcall),
+    -- so guard both derefs: Live can quit / lose its main window during the delay.
+    local app = getLiveHsAppObj()
+    local mainwin = app and app:mainWindow()
+    if not mainwin then return end
     local point = {}
-    local dimensions = getLiveHsAppObj():mainWindow():frame()
+    local dimensions = mainwin:frame()
     local bookmark = {}
     bookmark["x"] = _G.bookmarkx + dimensions.x
     bookmark["y"] = _G.bookmarky + dimensions.y + titlebarheight()
@@ -169,8 +174,18 @@ end
 local debounce2 = 0
 local pluginStats = require("tracking.pluginstats")
 local function rcLog(msg)
-    local f = io.open(ScriptUserPath .. "/debug.log", "a")
-    if f then f:write(os.date("[%H:%M:%S][rightclick] ") .. tostring(msg) .. "\n"); f:close() end
+    -- Only log when debug mode is enabled. Previously this appended to debug.log
+    -- on every plugin load with no gate or rotation, growing the file unbounded.
+    if _G.enabledebug ~= 1 then return end
+    local path = ScriptUserPath .. "/debug.log"
+    local pre = io.open(path, "r")
+    local existed = pre ~= nil
+    if pre then pre:close() end
+    local f = io.open(path, "a")
+    if not f then return end
+    f:write(os.date("[%H:%M:%S][rightclick] ") .. tostring(msg) .. "\n")
+    f:close()
+    if not existed and type(SetSecureFileMode) == "function" then SetSecureFileMode(path) end
 end
 -- the plugin names need to have any newline characters removed
 function loadPlugin(plugin)
@@ -224,12 +239,24 @@ function loadPlugin(plugin)
     if liveApp then
         rcLog("activating liveApp")
         liveApp:activate()
-        hs.timer.doAfter(1.0, function()
-            local isFront = liveApp:isFrontmost()
-            rcLog("sending Cmd+F isFront=" .. tostring(isFront))
-            hs.eventtap.keyStroke("cmd", "f", 0)
-            hs.timer.doAfter(0.5, doTypeAndAdd)
-        end)
+        -- Poll for Live to come frontmost instead of a blind 1.0s wait, then
+        -- scale the pre-type delay off loadspeed. A ~2s safety cap covers the
+        -- case where activation never completes. Removes the old fixed 1.5s
+        -- floor that every plugin insertion paid regardless of loadspeed.
+        local waited = 0
+        hs.timer.waitUntil(
+            function()
+                waited = waited + 0.05
+                local ok, front = pcall(function() return liveApp:isFrontmost() end)
+                return (ok and front) or waited >= 2.0
+            end,
+            function()
+                rcLog("sending Cmd+F (frontmost or timeout)")
+                hs.eventtap.keyStroke("cmd", "f", 0)
+                hs.timer.doAfter(math.max(_G.loadspeed or 0.3, 0.1), doTypeAndAdd)
+            end,
+            0.05
+        )
     else
         rcLog("liveApp not found, calling sendKeys immediately")
         hs.eventtap.keyStroke("cmd", "f", 0)
