@@ -295,7 +295,7 @@ function buildPluginMenu()
             else
                 table.insert(getCat(lastcatagoryName), {title = categoryName, menu = getCat(categoryName)})
             end
-            table.insert(scopes, lastcatagoryName)
+            -- scopes is maintained uniformly at the end of the loop (see below)
             -- THIS IS IF WE GO BACK TO THE ROOT FOLDER AFTER BEING IN A SUBFOLDER
         elseif level == 0 then
             if string.find(string.sub(thisIndex[3], 1, 4), "%-%-") or
@@ -331,7 +331,7 @@ function buildPluginMenu()
             else
                 table.insert(getCat(lastcatagoryName), {title = categoryName, menu = getCat(categoryName)}) -- Inserts the new menu
             end
-            table.insert(scopes, lastcatagoryName)
+            -- scopes is maintained uniformly at the end of the loop (see below)
 
             -- Same scope
         elseif level == lastLevel and categoryName == lastcatagoryName then
@@ -348,14 +348,14 @@ function buildPluginMenu()
 
             -- Same scope new folder
         elseif level == lastLevel and categoryName ~= lastcatagoryName then
-            table.remove(scopes, level + 1)
             ensureCat(categoryName)
 
-            -- Derive a valid parent category. A malformed menuconfig can leave
-            -- scopes[level] nil, which would make getCat() return nil and abort
-            -- the whole menu build via table.insert(nil, ...). Fall back to the
-            -- deepest known scope, then to the root "menu".
-            local parentName = scopes[level] or scopes[#scopes] or "menu"
+            -- A new sibling folder at the same depth: its parent is the category
+            -- open ONE LEVEL UP (scopes[level-1]), not scopes[level]. The old code
+            -- read scopes[level] and table.remove'd, which after a deep-then-shallow
+            -- excursion resolved the wrong parent (issue #11). Fall back to the
+            -- previous category, then the root.
+            local parentName = (level <= 1) and "menu" or (scopes[level - 1] or lastcatagoryName or "menu")
             ensureCat(parentName)
             local parentCat = getCat(parentName)
             if parentCat ~= nil then
@@ -369,12 +369,12 @@ function buildPluginMenu()
 
             -- Down scope with new folder
         elseif level < lastLevel and categoryName ~= lastcatagoryName then
-            if scopes[level] == "menu" then
-                scopes = {"menu"}
-            end
             if getCat(categoryName) == nil then
                 setCat(categoryName, {})
-                table.insert(getCat(scopes[level]), {title = categoryName, menu = getCat(categoryName)}) -- Inserts the new menu
+                -- Parent is the category open one level up.
+                local parentName = (level <= 1) and "menu" or (scopes[level - 1] or "menu")
+                ensureCat(parentName)
+                table.insert(getCat(parentName), {title = categoryName, menu = getCat(categoryName)}) -- Inserts the new menu
             end
 
             if string.find(string.sub(pluginArray[i], 1, 2), "%-%-") or
@@ -407,6 +407,19 @@ function buildPluginMenu()
                 }) -- inserts plugin
             end
         end
+        -- Maintain `scopes` as a clean depth-indexed stack: scopes[d] = the
+        -- category open at depth d, so a later folder resolves its parent
+        -- uniformly as scopes[depth-1]. Replaces the old ad-hoc push/remove that
+        -- corrupted the stack after deep-then-shallow nesting (issue #11).
+        -- (64 is an arbitrary ceiling well above any real menu depth; clearing a
+        -- fixed range avoids the unreliable # operator on a table with holes.)
+        if level == 0 then
+            for k = 1, 64 do scopes[k] = nil end
+        else
+            scopes[level] = categoryName
+            for k = level + 1, 64 do scopes[k] = nil end
+        end
+
         lastLevel = level
         -- this conditional basically checks if we are 'home' and if we are
         -- then we last category = menu.
