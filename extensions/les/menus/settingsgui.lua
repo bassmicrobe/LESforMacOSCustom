@@ -19,6 +19,11 @@ local settingsUC = nil
 ---@type hs.timer|nil
 local pendingReloadTimer = nil
 
+local function sLog(msg)
+    local f = io.open(ScriptUserPath .. "/debug.log", "a")
+    if f then f:write(os.date("[%H:%M:%S][settingsgui] ") .. tostring(msg) .. "\n"); f:close() end
+end
+
 -- Distinct marker the GUI puts in the openaikey input when the user clicks '削除'.
 -- It can never collide with a real OpenAI key (those start with 'sk-' and never
 -- contain '__'). collectGuiPatchFromData() maps it to the '未設定' default sentinel.
@@ -113,8 +118,8 @@ local function buildSettingsHTML()
             '    <span class="block text-[11px] text-label-dim mt-px">', s.desc, '</span>',
             '  </div>',
             '  <label class="relative inline-block w-[42px] h-6 shrink-0">',
-            '    <input type="checkbox" class="opacity-0 w-0 h-0" data-key="', s.key, '"', checked, ' onchange="markDirty()">',
-            '    <span class="toggle-knob absolute inset-0 bg-surface-hover rounded-full cursor-pointer transition-colors duration-200"></span>',
+            '    <input type="checkbox" data-key="', s.key, '"', checked, ' onchange="markDirty()" style="position:absolute;inset:0;opacity:0;cursor:pointer;margin:0;width:100%;height:100%;">',
+            '    <span class="toggle-knob absolute inset-0 bg-surface-hover rounded-full pointer-events-none transition-colors duration-200"></span>',
             '  </label>',
             '</div>',
         }, "\n"))
@@ -271,7 +276,7 @@ local function buildSettingsHTML()
         "function saveSettings() {",
         "  var settings = {};",
         "  document.querySelectorAll('[data-key]').forEach(function(el) {",
-        "    var k = el.getAttribute('data-key');",
+        "    var k = (el.getAttribute('data-key') || '').trim();",
         "    if (!k) return;",
         "    if (el.type === 'checkbox') {",
         "      settings[k] = el.checked ? '1' : '0';",
@@ -398,9 +403,18 @@ local function collectGuiPatchFromData(data)
         return {}
     end
     local canon = canonicalizeWebviewTable(data) or data
+    local dbgKeys = {}
+    for k in pairs(data) do dbgKeys[#dbgKeys+1] = tostring(k) end
+    table.sort(dbgKeys)
+    sLog("data actual keys: " .. table.concat(dbgKeys, ","))
     local patch = {}
     local function pullKey(k)
+        if k == "autoadd" or k == "pianorollmacro" then
+            local smv = settingsManager and settingsManager[k]
+            sLog("pullKey(" .. k .. "): sm=" .. type(smv) .. " canon=" .. tostring(canon[k]) .. " data=" .. tostring(data[k]))
+        end
         if type(k) ~= "string" or type(settingsManager[k]) ~= "table" then
+            sLog("pullKey EARLY1 k=" .. tostring(k))
             return
         end
         local v = canon[k]
@@ -408,6 +422,7 @@ local function collectGuiPatchFromData(data)
             v = data[k]
         end
         if v == nil then
+            sLog("pullKey EARLY2 k=" .. tostring(k) .. " v=nil")
             return
         end
         if k == "openaikey" then
@@ -466,6 +481,7 @@ local function reportSaveResult(ok, message)
     end)
 end
 
+
 --- Open the settings GUI webview panel.
 --- Saves via settingsManager:writeFromGui() then calls reloadLES().
 function openSettingsGUI()
@@ -486,19 +502,24 @@ function openSettingsGUI()
     -- Set up JS→Lua message bridge
     settingsUC = hs.webview.usercontent.new("lesmessages")
     settingsUC:setCallback(function(msg)
+        dLog("callback fired: msg type=" .. type(msg))
         if msg == nil then
+            dLog("msg is nil, returning")
             return
         end
         local bodyRaw = msg
         if type(msg) == "table" and msg.body ~= nil then
             bodyRaw = msg.body
         end
+        dLog("bodyRaw type=" .. type(bodyRaw) .. " len=" .. tostring(type(bodyRaw)=="string" and #bodyRaw or "n/a"))
         local body = decodeWebviewMessageBody(bodyRaw)
         if not body then
+            dLog("decodeWebviewMessageBody returned nil")
             return
         end
         body = canonicalizeWebviewTable(body) or body
         local action = body.action or body.Action
+        dLog("action=" .. tostring(action))
         if tostring(action or "") ~= "save" then
             return
         end
@@ -507,7 +528,9 @@ function openSettingsGUI()
         if data == nil and type(rawData) == "table" then
             data = rawData
         end
+        dLog("rawData type=" .. type(rawData) .. " data type=" .. type(data))
         if type(data) ~= "table" then
+            dLog("ERROR: data is not a table")
             print(
                 "[settingsgui] save: body.data missing or not a table (got "
                     .. tostring(type(rawData))
@@ -535,6 +558,7 @@ function openSettingsGUI()
         end
         table.sort(patchKeys)
         local patchCount = #patchKeys
+        dLog(string.format("data keys=%d patch keys=%d patch=%s", dataKeyCount, patchCount, table.concat(patchKeys, ",")))
         print(
             string.format(
                 "[settingsgui] save: data keys=%d patch keys=%d patch=%s",
@@ -546,6 +570,7 @@ function openSettingsGUI()
         if settingsManager and next(patch) ~= nil then
             print("[settingsgui] save: calling writeFromGui with", patchCount, "keys")
             local okWrite = settingsManager:writeFromGui(patch)
+            dLog("writeFromGui result=" .. tostring(okWrite))
             if not okWrite then
                 -- Report failure to the GUI: red toast, keep dirty=true and the button enabled.
                 reportSaveResult(false, "保存に失敗しました（設定ファイルへ書き込めません）")
@@ -564,6 +589,12 @@ function openSettingsGUI()
             -- in-process and does NOT call hs.reload()), so the apply must not depend
             -- on whether the panel is reopened within the cosmetic teardown window.
             local okReload, errReload = pcall(reloadLES)
+            dLog("reloadLES result=" .. tostring(okReload) .. " err=" .. tostring(errReload))
+            -- Verify values made it to memory after reload
+            if settingsManager then
+                local spot = settingsManager["autoadd"] and settingsManager["autoadd"]["value"]
+                dLog("post-reload autoadd in memory=" .. tostring(spot))
+            end
             if not okReload then
                 print("[settingsgui] reloadLES() error: " .. tostring(errReload))
                 pcall(function()

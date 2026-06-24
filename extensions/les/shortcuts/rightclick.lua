@@ -163,11 +163,17 @@ end
 
 local debounce2 = 0
 local pluginStats = require("tracking.pluginstats")
+local function rcLog(msg)
+    local f = io.open(ScriptUserPath .. "/debug.log", "a")
+    if f then f:write(os.date("[%H:%M:%S][rightclick] ") .. tostring(msg) .. "\n"); f:close() end
+end
 -- the plugin names need to have any newline characters removed
 function loadPlugin(plugin)
     local pluginCleaned = plugin:match '^%s*(.*%S)' or ''
+    pluginCleaned = pluginCleaned:gsub('^"(.*)"$', '%1')
     pluginStats.recordUse(pluginCleaned)
     local liveApp = getLiveHsAppObj and getLiveHsAppObj()
+    rcLog("loadPlugin called: plugin=" .. tostring(pluginCleaned) .. " liveApp=" .. tostring(liveApp ~= nil))
 
     -- Capture modifier state NOW before any async delay; the user may release
     -- Cmd before the timer fires so we must snapshot it synchronously.
@@ -185,19 +191,22 @@ function loadPlugin(plugin)
         tempautoadd = _G.autoadd or 0
     end
 
-    local function sendKeys()
-        hs.eventtap.keyStroke("cmd", "f", 0)
+    local function doTypeAndAdd()
+        local frontApp = hs.application.frontmostApplication()
+        local frontName = frontApp and frontApp:name() or "nil"
+        local isFront = liveApp and liveApp:isFrontmost()
+        rcLog("typing: plugin=" .. pluginCleaned .. " frontmost=" .. frontName .. " liveIsFront=" .. tostring(isFront) .. " tempautoadd=" .. tostring(tempautoadd) .. " _G.autoadd=" .. tostring(_G.autoadd))
         hs.eventtap.keyStrokes(pluginCleaned)
 
-        if _G.enabledebug == 1 then
-            print("tempautoadd = " .. tostring(tempautoadd) .. " and _G.autoadd = " .. tostring(_G.autoadd))
-        end
-
         if tempautoadd == 1 then
-            hs.timer.doAfter(_G.loadspeed, function()
+            local addDelay = math.max(_G.loadspeed or 0.3, 1.0)
+            hs.timer.doAfter(addDelay, function()
+                rcLog("sending down+return+escape delay=" .. tostring(addDelay))
                 hs.eventtap.keyStroke({}, "down", 0)
-                hs.eventtap.keyStroke({}, "return", 0)
-                hs.eventtap.keyStroke({}, "escape", 0)
+                hs.timer.doAfter(0.1, function()
+                    hs.eventtap.keyStroke({}, "return", 0)
+                    hs.eventtap.keyStroke({}, "escape", 0)
+                end)
                 if _G.resettobrowserbookmark == 1 then
                     local bookmarkDelay = _G.loadspeed <= 0.5 and 0.1 or 0.3
                     hs.timer.doAfter(bookmarkDelay, bookmarkfunc)
@@ -210,13 +219,17 @@ function loadPlugin(plugin)
     end
 
     if liveApp then
+        rcLog("activating liveApp")
         liveApp:activate()
-        -- activate() is asynchronous on macOS: focus switches on the next
-        -- runloop iteration, so keystrokes sent synchronously would still land
-        -- in whatever app currently has focus. Delay 0.15 s to let the window
-        -- manager hand focus to Live before we send Cmd+F.
-        hs.timer.doAfter(0.15, sendKeys)
+        hs.timer.doAfter(1.0, function()
+            local isFront = liveApp:isFrontmost()
+            rcLog("sending Cmd+F isFront=" .. tostring(isFront))
+            hs.eventtap.keyStroke("cmd", "f", 0)
+            hs.timer.doAfter(0.5, doTypeAndAdd)
+        end)
     else
-        sendKeys()
+        rcLog("liveApp not found, calling sendKeys immediately")
+        hs.eventtap.keyStroke("cmd", "f", 0)
+        doTypeAndAdd()
     end
 end
