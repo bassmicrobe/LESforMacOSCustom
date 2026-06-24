@@ -502,24 +502,24 @@ function openSettingsGUI()
     -- Set up JS→Lua message bridge
     settingsUC = hs.webview.usercontent.new("lesmessages")
     settingsUC:setCallback(function(msg)
-        dLog("callback fired: msg type=" .. type(msg))
+        sLog("callback fired: msg type=" .. type(msg))
         if msg == nil then
-            dLog("msg is nil, returning")
+            sLog("msg is nil, returning")
             return
         end
         local bodyRaw = msg
         if type(msg) == "table" and msg.body ~= nil then
             bodyRaw = msg.body
         end
-        dLog("bodyRaw type=" .. type(bodyRaw) .. " len=" .. tostring(type(bodyRaw)=="string" and #bodyRaw or "n/a"))
+        sLog("bodyRaw type=" .. type(bodyRaw) .. " len=" .. tostring(type(bodyRaw)=="string" and #bodyRaw or "n/a"))
         local body = decodeWebviewMessageBody(bodyRaw)
         if not body then
-            dLog("decodeWebviewMessageBody returned nil")
+            sLog("decodeWebviewMessageBody returned nil")
             return
         end
         body = canonicalizeWebviewTable(body) or body
         local action = body.action or body.Action
-        dLog("action=" .. tostring(action))
+        sLog("action=" .. tostring(action))
         if tostring(action or "") ~= "save" then
             return
         end
@@ -528,9 +528,9 @@ function openSettingsGUI()
         if data == nil and type(rawData) == "table" then
             data = rawData
         end
-        dLog("rawData type=" .. type(rawData) .. " data type=" .. type(data))
+        sLog("rawData type=" .. type(rawData) .. " data type=" .. type(data))
         if type(data) ~= "table" then
-            dLog("ERROR: data is not a table")
+            sLog("ERROR: data is not a table")
             print(
                 "[settingsgui] save: body.data missing or not a table (got "
                     .. tostring(type(rawData))
@@ -558,7 +558,7 @@ function openSettingsGUI()
         end
         table.sort(patchKeys)
         local patchCount = #patchKeys
-        dLog(string.format("data keys=%d patch keys=%d patch=%s", dataKeyCount, patchCount, table.concat(patchKeys, ",")))
+        sLog(string.format("data keys=%d patch keys=%d patch=%s", dataKeyCount, patchCount, table.concat(patchKeys, ",")))
         print(
             string.format(
                 "[settingsgui] save: data keys=%d patch keys=%d patch=%s",
@@ -570,7 +570,7 @@ function openSettingsGUI()
         if settingsManager and next(patch) ~= nil then
             print("[settingsgui] save: calling writeFromGui with", patchCount, "keys")
             local okWrite = settingsManager:writeFromGui(patch)
-            dLog("writeFromGui result=" .. tostring(okWrite))
+            sLog("writeFromGui result=" .. tostring(okWrite))
             if not okWrite then
                 -- Report failure to the GUI: red toast, keep dirty=true and the button enabled.
                 reportSaveResult(false, "保存に失敗しました（設定ファイルへ書き込めません）")
@@ -589,11 +589,11 @@ function openSettingsGUI()
             -- in-process and does NOT call hs.reload()), so the apply must not depend
             -- on whether the panel is reopened within the cosmetic teardown window.
             local okReload, errReload = pcall(reloadLES)
-            dLog("reloadLES result=" .. tostring(okReload) .. " err=" .. tostring(errReload))
+            sLog("reloadLES result=" .. tostring(okReload) .. " err=" .. tostring(errReload))
             -- Verify values made it to memory after reload
             if settingsManager then
                 local spot = settingsManager["autoadd"] and settingsManager["autoadd"]["value"]
-                dLog("post-reload autoadd in memory=" .. tostring(spot))
+                sLog("post-reload autoadd in memory=" .. tostring(spot))
             end
             if not okReload then
                 print("[settingsgui] reloadLES() error: " .. tostring(errReload))

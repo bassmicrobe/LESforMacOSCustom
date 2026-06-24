@@ -60,13 +60,19 @@ body {
     flex: 1; overflow-y: auto; padding: 12px 16px;
     display: flex; flex-direction: column; gap: 10px;
 }
-.msg { max-width: 85%; padding: 9px 13px; border-radius: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
-.msg.user { align-self: flex-end; background: #0a84ff; color: #fff; border-bottom-right-radius: 4px; }
+.msg { max-width: 85%; padding: 9px 13px; border-radius: 14px; line-height: 1.5; word-break: break-word; }
+.msg.user { align-self: flex-end; background: #0a84ff; color: #fff; border-bottom-right-radius: 4px; white-space: pre-wrap; }
 .msg.assistant { align-self: flex-start; background: #2c2c2e; color: #e5e5ea; border-bottom-left-radius: 4px; }
-.msg.error { align-self: flex-start; background: #3a1c1c; color: #ff6b6b; border-bottom-left-radius: 4px; }
+.msg.error { align-self: flex-start; background: #3a1c1c; color: #ff6b6b; border-bottom-left-radius: 4px; white-space: pre-wrap; }
 .msg code { background: rgba(255,255,255,0.1); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
 .msg pre { background: rgba(0,0,0,0.3); padding: 8px 10px; border-radius: 6px; overflow-x: auto; margin: 6px 0; }
 .msg pre code { background: none; padding: 0; }
+.msg h1,.msg h2,.msg h3 { font-weight: 600; margin: 6px 0 3px; }
+.msg h1 { font-size: 15px; } .msg h2 { font-size: 14px; }
+.msg ul,.msg ol { padding-left: 18px; margin: 4px 0; }
+.msg li { margin: 2px 0; }
+.msg p { margin: 4px 0; } .msg p:first-child { margin-top: 0; } .msg p:last-child { margin-bottom: 0; }
+.msg hr { border: none; border-top: 1px solid rgba(255,255,255,0.2); margin: 8px 0; }
 .typing { align-self: flex-start; color: #636366; font-style: italic; padding: 4px 0; }
 .input-area {
     padding: 10px 16px 14px; border-top: 1px solid #2c2c2e;
@@ -104,6 +110,35 @@ button.send:disabled { opacity: 0.4; cursor: default; }
   <button class="send" id="sendBtn" onclick="send()">送信</button>
 </div>
 <script>
+function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function mdToHtml(md){
+    var stash=[];
+    function hide(h){var k='\x01'+stash.length+'\x01';stash.push(h);return k;}
+    md=md.replace(/```[\w]*\n?([\s\S]*?)```/g,function(_,c){
+        return hide('<pre><code>'+escHtml(c.replace(/\n$/,''))+'</code></pre>');
+    });
+    md=md.replace(/`([^`\n]+)`/g,function(_,c){return hide('<code>'+escHtml(c)+'</code>');});
+    md=escHtml(md);
+    md=md.replace(/^### (.+)$/gm,'<h3>$1</h3>');
+    md=md.replace(/^## (.+)$/gm,'<h2>$1</h2>');
+    md=md.replace(/^# (.+)$/gm,'<h1>$1</h1>');
+    md=md.replace(/\*\*\*(.+?)\*\*\*/g,'<strong><em>$1</em></strong>');
+    md=md.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+    md=md.replace(/\*(.+?)\*/g,'<em>$1</em>');
+    md=md.replace(/^---+$/gm,'<hr>');
+    md=md.replace(/((?:^[-*] .+(?:\n|$))+)/gm,function(b){
+        return '<ul>'+b.replace(/^[-*] (.+)$/gm,'<li>$1</li>')+'</ul>';
+    });
+    md=md.replace(/((?:^\d+\. .+(?:\n|$))+)/gm,function(b){
+        return '<ol>'+b.replace(/^\d+\. (.+)$/gm,'<li>$1</li>')+'</ol>';
+    });
+    var out=md.split(/\n\n+/).map(function(p){
+        p=p.trim();if(!p)return '';
+        if(/^<(?:h[1-6]|ul|ol|hr|pre)/.test(p)||/^\x01/.test(p))return p;
+        return '<p>'+p.replace(/\n/g,'<br>')+'</p>';
+    }).join('');
+    return out.replace(/\x01(\d+)\x01/g,function(_,i){return stash[+i];});
+}
 var sending = false;
 function resizeTA(el) {
     el.style.height = 'auto';
@@ -130,7 +165,7 @@ function addMessage(role, text) {
     removeTyping();
     var el = document.createElement('div');
     el.className = 'msg ' + role;
-    el.textContent = text;
+    if (role === 'assistant') { el.innerHTML = mdToHtml(text); } else { el.textContent = text; }
     document.getElementById('messages').appendChild(el);
     scrollBottom();
 }

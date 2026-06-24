@@ -56,13 +56,18 @@ local leftMouseUpType = hs.eventtap.event.types.leftMouseUp
 --- Open plugin or piano menu after a confirmed double secondary click.
 ---@param usePiano boolean
 local function spawnMenuAfterDoubleSecondary(usePiano)
-    if _G.dynamicreload == 1 then
-        quickreload()
+    local function spawnMenu()
+        if usePiano then spawnPianoMenu() else spawnPluginMenu() end
     end
-    if usePiano then
-        spawnPianoMenu()
+    if _G.dynamicreload == 1 then
+        -- quickreload() does file I/O + full menu rebuild; defer to next run-loop
+        -- tick so the click handler returns immediately and avoids a UI freeze.
+        hs.timer.doAfter(0, function()
+            quickreload()
+            spawnMenu()
+        end)
     else
-        spawnPluginMenu()
+        spawnMenu()
     end
 end
 
@@ -192,10 +197,8 @@ function loadPlugin(plugin)
     end
 
     local function doTypeAndAdd()
-        local frontApp = hs.application.frontmostApplication()
-        local frontName = frontApp and frontApp:name() or "nil"
         local isFront = liveApp and liveApp:isFrontmost()
-        rcLog("typing: plugin=" .. pluginCleaned .. " frontmost=" .. frontName .. " liveIsFront=" .. tostring(isFront) .. " tempautoadd=" .. tostring(tempautoadd) .. " _G.autoadd=" .. tostring(_G.autoadd))
+        rcLog("typing: plugin=" .. pluginCleaned .. " liveIsFront=" .. tostring(isFront) .. " tempautoadd=" .. tostring(tempautoadd) .. " _G.autoadd=" .. tostring(_G.autoadd))
         hs.eventtap.keyStrokes(pluginCleaned)
 
         if tempautoadd == 1 then

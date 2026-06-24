@@ -54,6 +54,13 @@ function getMenuBar(debugEnabled, strictEnabled)
   }, {
     debug = false,
     state = nil,
+    title = "トラックメモ",
+    fn = function()
+      openTrackNotes()
+    end
+  }, {
+    debug = false,
+    state = nil,
     title = "-"
   }, {
     debug = false,

@@ -72,7 +72,13 @@ body {
 .header p { font-size: 11px; color: #636366; margin-top: 3px; }
 .content { flex: 1; overflow-y: auto; padding: 16px; }
 .loading { color: #636366; text-align: center; margin-top: 60px; line-height: 1.8; }
-.result { line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+.result { line-height: 1.7; word-break: break-word; }
+.result h2,.result h3 { font-weight: 600; margin: 10px 0 4px; color: #d0d0d5; }
+.result h2 { font-size: 14px; } .result h3 { font-size: 13px; }
+.result ul,.result ol { padding-left: 20px; margin: 6px 0; }
+.result li { margin: 3px 0; }
+.result p { margin: 6px 0; } .result p:first-child { margin-top: 0; }
+.result hr { border: none; border-top: 1px solid #3a3a3c; margin: 12px 0; }
 .error { color: #ff6b6b; text-align: center; margin-top: 60px; }
 .input-area {
     padding: 10px 16px 14px; border-top: 1px solid #2c2c2e;
@@ -106,8 +112,40 @@ button.send:hover { background: #409cff; }
   <button class="send" onclick="ask()">再提案</button>
 </div>
 <script>
+function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function mdToHtml(md){
+    var stash=[];
+    function hide(h){var k='\x01'+stash.length+'\x01';stash.push(h);return k;}
+    md=md.replace(/```[\w]*\n?([\s\S]*?)```/g,function(_,c){
+        return hide('<pre><code>'+escHtml(c.replace(/\n$/,''))+'</code></pre>');
+    });
+    md=md.replace(/`([^`\n]+)`/g,function(_,c){return hide('<code>'+escHtml(c)+'</code>');});
+    md=escHtml(md);
+    md=md.replace(/^### (.+)$/gm,'<h3>$1</h3>');
+    md=md.replace(/^## (.+)$/gm,'<h2>$1</h2>');
+    md=md.replace(/^# (.+)$/gm,'<h1>$1</h1>');
+    md=md.replace(/\*\*\*(.+?)\*\*\*/g,'<strong><em>$1</em></strong>');
+    md=md.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+    md=md.replace(/\*(.+?)\*/g,'<em>$1</em>');
+    md=md.replace(/^---+$/gm,'<hr>');
+    md=md.replace(/((?:^[-*] .+(?:\n|$))+)/gm,function(b){
+        return '<ul>'+b.replace(/^[-*] (.+)$/gm,'<li>$1</li>')+'</ul>';
+    });
+    md=md.replace(/((?:^\d+\. .+(?:\n|$))+)/gm,function(b){
+        return '<ol>'+b.replace(/^\d+\. (.+)$/gm,'<li>$1</li>')+'</ol>';
+    });
+    var out=md.split(/\n\n+/).map(function(p){
+        p=p.trim();if(!p)return '';
+        if(/^<(?:h[1-6]|ul|ol|hr|pre)/.test(p)||/^\x01/.test(p))return p;
+        return '<p>'+p.replace(/\n/g,'<br>')+'</p>';
+    }).join('');
+    return out.replace(/\x01(\d+)\x01/g,function(_,i){return stash[+i];});
+}
 function setContent(html) {
     document.getElementById('content').innerHTML = html;
+}
+function setMarkdown(text) {
+    setContent('<div class="result">' + mdToHtml(text) + '</div>');
 }
 function ask() {
     var extra = document.getElementById('inp').value.trim();
@@ -151,7 +189,7 @@ local function fetchRecommendations(extra)
                 string.format("setContent('<div class=\"error\">%s</div>');", jsEscape(errMsg)))
         else
             _webview:evaluateJavaScript(
-                string.format("setContent('<div class=\"result\">' + '%s' + '</div>');", jsEscape(reply)))
+                string.format("setMarkdown('%s');", jsEscape(reply)))
         end
     end)
 end

@@ -12,6 +12,16 @@
 
 local notifs = require("tracking.notifications")
 
+local AUTOSAVE_INTERVAL = 60 -- seconds between periodic disk flushes
+local lastAutosave = 0
+
+local function saveTimerToDisk(name)
+    local val = tonumber(_G["timer_" .. name]) or 0
+    ShellCreateDirectory(strJoinPaths(ScriptUserResourcesPath, "time"))
+    local filepath = GetDataPath([[resources/time/]] .. name .. "_time.txt")
+    ShellOverwriteFile(val, filepath)
+end
+
 function setstricttime() -- this function manages the check box in the menu
     local appname = getLiveHsAppObj() -- getting new track title
     if _G.stricttimevar == true then
@@ -35,16 +45,7 @@ function coolfunc(_hswindow, _appname, _straw) -- function that handles saving a
     if trackname ~= nil then -- saving old time
         local oldtrackname = trackname
         print(_G["timer_" .. oldtrackname])
-        ShellCreateDirectory(strJoinPaths(ScriptUserResourcesPath, "time"))
-        local filepath = GetDataPath([[resources/time/]] .. oldtrackname .. "_time" .. [[.txt]])
-        local f2 = io.open(filepath, "r")
-        if f2 ~= nil then
-            io.close(f2)
-            ShellDeleteFile(strJoinPaths(strJoinPaths(ScriptUserResourcesPath, "time"), oldtrackname .. "_time" .. [[.txt]]))
-        end
-        -- Persist as a number; writing a nil/garbage value poisons the file and
-        -- crashes the per-second tick on the next load ("nil" + 1)
-        ShellOverwriteFile(tonumber(_G["timer_" .. oldtrackname]) or 0, strJoinPaths(strJoinPaths(ScriptUserResourcesPath, "time"), oldtrackname .. "_time" .. [[.txt]]))
+        saveTimerToDisk(oldtrackname)
         _G["timer_" .. oldtrackname] = nil
     end
 
@@ -140,9 +141,9 @@ function timerfunc()
     end
 
     -- Track time counting
+    local now = hs.timer.secondsSinceEpoch()
     if trackname == nil then
         -- Throttled retry: only re-resolve the active project every few seconds.
-        local now = hs.timer.secondsSinceEpoch()
         if (now - lastCoolAttempt) >= COOL_RETRY_INTERVAL then
             lastCoolAttempt = now
             coolfunc()
@@ -151,6 +152,11 @@ function timerfunc()
     if trackname ~= nil then
         local timerKey = getTimerKey(trackname)
         _G[timerKey] = (_G[timerKey] or 0) + 1
+        -- Periodic autosave: flush to disk every 60 seconds so crashes don't lose data
+        if (now - lastAutosave) >= AUTOSAVE_INTERVAL then
+            lastAutosave = now
+            saveTimerToDisk(trackname)
+        end
     end
 
     -- Hourly session time notification
@@ -193,8 +199,10 @@ function requesttime() -- this is the function for when someone checks the curre
         response = hs.dialog.blockAlert(L("timer_reset_title"), L("timer_reset_detail"), L("btn_no"), L("btn_yes"),
             "NSCriticalAlertStyle")
         if response == L("btn_yes") then
-            ShellDeleteFile(strJoinPaths(strJoinPaths(ScriptUserResourcesPath, "time"), trackname .. "_time" .. [[.txt]]))
-            coolfunc()
+            -- Reset in-memory value first, then persist 0 — calling coolfunc() here would
+            -- re-save the pre-reset value before clearing it, which is the old bug.
+            _G["timer_" .. trackname] = 0
+            saveTimerToDisk(trackname)
         end
     end
 
