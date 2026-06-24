@@ -584,6 +584,11 @@ function buildMenuBar() -- this function makes the menu bar happen, the one that
         print("[LES] buildMenuBar: setMenu failed: " .. tostring(errMenu))
     end
     applyLesMainMenubarAppearance(LESmenubar)
+    -- Re-assert a non-default menubar state (e.g. paused) after a rebuild;
+    -- otherwise a reload while paused would silently revert to the normal icon (#55).
+    if _G.lesMenubarState == "paused" and type(updateMenuBarState) == "function" then
+        updateMenuBarState("paused")
+    end
 end
 
 function rebuildRcMenu()

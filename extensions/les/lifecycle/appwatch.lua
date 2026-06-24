@@ -24,6 +24,9 @@ function disablemacros() -- this function stops all of the eventtap events, caus
         vstshenabled = 0
         undo:disable()
         redo:disable()
+        -- Clear the VST-window detection cache so timerfunc() re-detects and
+        -- re-enables undo/redo when the same VST window is refocused (#48).
+        if type(resetVstWindowState) == "function" then resetVstWindowState() end
     end
 
     if keyhandlerevent then

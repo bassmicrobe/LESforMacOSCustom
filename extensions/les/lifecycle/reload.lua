@@ -99,6 +99,9 @@ function cheats()
     -- it needs to be up here, because it's used in the reloadLES() routine. Functions need to be declared before they're used.
 
     if _G.enabledebug == 1 then
+        -- Stop the previous tap before replacing it; cheats() runs on every
+        -- reloadLES(), so without this each debug reload leaked an eventtap (#47).
+        if dingodango then dingodango:stop() end
         local down1, down2 = false, true
         local press1, press2
         -- this "dingodango" thing keeps track of the user doubletapping both shift keys. cheatmenu() is run when you do.

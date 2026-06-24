@@ -70,6 +70,14 @@ end
 
 -- Recursive copy using hs.fs for directory traversal and pure Lua I/O
 function ShellRecursiveCopy(source, destination)
+    -- Use symlinkAttributes (lstat) first so we DON'T follow symlinks: a
+    -- directory symlink in the source would otherwise be recursed into,
+    -- risking a copy loop if it points at an ancestor (#62).
+    local linkAttrs = hs.fs.symlinkAttributes(source)
+    if linkAttrs ~= nil and linkAttrs.mode == "link" then
+        print("ShellRecursiveCopy(): skipping symlink: " .. source)
+        return
+    end
     local attrs = hs.fs.attributes(source)
     if attrs == nil then
         print("ShellRecursiveCopy(): source does not exist: " .. source)
