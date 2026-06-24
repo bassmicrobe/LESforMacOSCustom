@@ -261,10 +261,21 @@ function scanner.scanAU()
     if not output or output == "" then return results end
 
     local currentName = nil
+    local linesSinceName = 0
     for line in output:gmatch("[^\n]+") do
         local pluginName = line:match("^%s%s%s%s(%S.+):$")
         if pluginName then
             currentName = pluginName
+            linesSinceName = 0
+        elseif currentName then
+            -- A real AU entry has its "Type:" within a few lines of its name.
+            -- Section headers captured by the indent pattern don't, so drop a
+            -- candidate name that goes too long without a Type (avoids headers
+            -- absorbing an unrelated later Type — #44).
+            linesSinceName = linesSinceName + 1
+            if linesSinceName > 8 then
+                currentName = nil
+            end
         end
         if currentName then
             local pluginType = line:match("^%s+Type:%s+(.+)$")
@@ -352,10 +363,18 @@ local function mergePluginLists(auPlugins, vst3Plugins)
         local existing = byName[p.name]
         if not existing then
             byName[p.name] = { category = p.category, format = p.format }
-        elseif existing.category == "Effects" or existing.category == "Instruments" then
-            if p.category ~= "Effects" and p.category ~= "Instruments" then
-                existing.category = p.category
+        else
+            -- Plugin exists in both AU and VST3: always mark it dual-format
+            -- (once), regardless of category. The old code only updated the
+            -- format when the AU category was generic, so a plugin AU-classified
+            -- with a specific category stayed "AU" only (#45).
+            if not existing.format:find("VST3", 1, true) then
                 existing.format = existing.format .. "/VST3"
+            end
+            -- Prefer a specific VST3 category over a generic AU one.
+            if (existing.category == "Effects" or existing.category == "Instruments")
+                and p.category ~= "Effects" and p.category ~= "Instruments" then
+                existing.category = p.category
             end
         end
     end

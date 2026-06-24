@@ -303,22 +303,13 @@ function openPluginChooser()
             return
         end
 
-        -- Activate Live before triggering loadPlugin so Cmd+F hits Live
-        hs.timer.doAfter(0.05, function()
-            local liveApp = getLiveHsAppObj and getLiveHsAppObj()
-            if liveApp then
-                liveApp:activate()
-                hs.timer.doAfter(0.1, function()
-                    if type(choice.fn) == "function" then
-                        choice.fn()
-                    end
-                end)
-            else
-                if type(choice.fn) == "function" then
-                    choice.fn()
-                end
-            end
-        end)
+        -- loadPlugin() (rightclick.lua) now activates Live and polls for it to be
+        -- frontmost before typing, so the chooser no longer needs to pre-activate
+        -- or add fixed delays here — that duplicate work added ~150ms per
+        -- selection and redundantly re-activated Live (#38).
+        if type(choice.fn) == "function" then
+            choice.fn()
+        end
     end)
 
     -- Build action bar items at the top

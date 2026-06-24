@@ -103,6 +103,15 @@ end
 -- Cache for VST window detection
 local vstWindowState = { enabled = false, lastTitle = nil }
 
+-- Reset the VST-window detection cache. disablemacros() hard-disables the
+-- undo/redo hotkeys; without clearing lastTitle here, refocusing the SAME VST
+-- window after re-enabling macros leaves them dead (the title-change guard in
+-- timerfunc() never re-fires). Called from disablemacros().
+function resetVstWindowState()
+    vstWindowState.enabled = false
+    vstWindowState.lastTitle = nil
+end
+
 -- Throttle the coolfunc() fallback in timerfunc(). windowfilter + appwatch
 -- already drive trackname updates, so polling coolfunc() every second when
 -- trackname is nil is wasteful (each call may hit hs.application.find).

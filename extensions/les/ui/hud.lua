@@ -126,6 +126,7 @@ local MENUBAR_STATES = {
 --- Update the menubar icon/title to reflect the current LES state.
 ---@param state "active"|"paused"|"inactive"
 function updateMenuBarState(state)
+    _G.lesMenubarState = state  -- remembered so buildMenuBar() can re-assert it after a reload (#55)
     if LESmenubar == nil then return end
 
     local override = MENUBAR_STATES[state]

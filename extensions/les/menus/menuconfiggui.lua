@@ -477,7 +477,12 @@ function dsd(e,i){
   rr();
 }
 
+var _saveTimer=null;
 function saveData(){
+  saveResult(true,'保存中...');           // clears any prior watchdog
+  _saveTimer=setTimeout(function(){       // watchdog: surface a dropped Lua reply
+    saveResult(false,'応答がありませんでした。再度お試しください。');
+  },5000);
   window.webkit.messageHandlers.lesMenuConfig.postMessage(
     JSON.stringify({action:'save',data:state}));
 }
@@ -486,8 +491,11 @@ function cancelData(){
     JSON.stringify({action:'cancel'}));
 }
 function saveResult(ok,msg){
+  if(_saveTimer){clearTimeout(_saveTimer);_saveTimer=null;}
   var t=document.getElementById('mcToast');
   t.textContent=msg;t.className=ok?'tok':'terr';
+  // Auto-hide a failure toast so it doesn't linger forever.
+  if(!ok){setTimeout(function(){if(t.className==='terr'){t.className='';t.textContent='';}},4000);}
 }
 
 function openPicker(){

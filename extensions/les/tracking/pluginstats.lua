@@ -22,20 +22,39 @@ local function statsFilePath()
     return strJoinPaths(ScriptUserResourcesPath, STATS_FILE)
 end
 
+-- Short-TTL read cache. openPluginChooser() and the AI summary call load()
+-- several times in quick succession; re-reading + JSON-decoding the file each
+-- time is wasteful (#37). Mutators (save) refresh this, and Hammerspoon runs
+-- single-threaded on the run loop, so within-TTL reads stay consistent.
+local _statsCache = nil
+local _statsCacheTime = -1
+local STATS_CACHE_TTL = 2
+
+local function _now()
+    return (hs and hs.timer and hs.timer.secondsSinceEpoch and hs.timer.secondsSinceEpoch()) or 0
+end
+
 --- Load stats from disk. Returns a table keyed by plugin name.
 ---@return table<string, {added_at: number, last_used_at: number, use_count: number}>
 function pluginStats.load()
-    local path = statsFilePath()
-    local f = io.open(path, "r")
-    if not f then return {} end
-    local raw = f:read("*a")
-    f:close()
-    if not raw or raw == "" then return {} end
-    local ok, data = pcall(hs.json.decode, raw)
-    if ok and type(data) == "table" then
-        return data
+    local now = _now()
+    if _statsCache ~= nil and (now - _statsCacheTime) < STATS_CACHE_TTL then
+        return _statsCache
     end
-    return {}
+    local path = statsFilePath()
+    local data = {}
+    local f = io.open(path, "r")
+    if f then
+        local raw = f:read("*a")
+        f:close()
+        if raw and raw ~= "" then
+            local ok, decoded = pcall(hs.json.decode, raw)
+            if ok and type(decoded) == "table" then data = decoded end
+        end
+    end
+    _statsCache = data
+    _statsCacheTime = now
+    return data
 end
 
 --- Save stats table to disk.
@@ -55,7 +74,11 @@ function pluginStats.save(data)
         os.remove(tmp)
         return
     end
-    os.rename(tmp, path)
+    if os.rename(tmp, path) then
+        -- Keep the read cache consistent with what was just persisted (#37).
+        _statsCache = data
+        _statsCacheTime = _now()
+    end
 end
 
 --- Record a plugin use event.
