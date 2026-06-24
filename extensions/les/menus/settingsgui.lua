@@ -16,6 +16,13 @@
 local settingsWebview = nil
 ---@type hs.webview.usercontent|nil
 local settingsUC = nil
+---@type hs.timer|nil
+local pendingReloadTimer = nil
+
+-- Distinct marker the GUI puts in the openaikey input when the user clicks '削除'.
+-- It can never collide with a real OpenAI key (those start with 'sk-' and never
+-- contain '__'). collectGuiPatchFromData() maps it to the '未設定' default sentinel.
+local CLEAR_OPENAIKEY_MARKER = "__CLEAR_OPENAIKEY__"
 
 -- Binary settings definition: {key, display label, short description}
 local TOGGLE_DEFS = {
@@ -157,40 +164,111 @@ local function buildSettingsHTML()
         if settingsManager and settingsManager[s.key] then
             val = settingsManager[s.key]["value"] or ""
         end
-        -- type="password" は WKWebView により JS から .value が空になることがあるため text + マスク表示
-        local inputClass = (s.key == "openaikey")
-            and "w-[200px] shrink-0 bg-input-bg border border-input-border rounded-lg text-[#e5e5ea] px-2.5 py-1.5 text-[13px] outline-none focus:border-accent api-key-mask"
-            or "w-[200px] shrink-0 bg-input-bg border border-input-border rounded-lg text-[#e5e5ea] px-2.5 py-1.5 text-[13px] outline-none focus:border-accent"
+        -- '未設定' sentinel must never reach the DOM; display it (and an unconfigured key) as empty.
+        if tostring(val) == "未設定" then
+            val = ""
+        end
+        local inputClass =
+            "w-[200px] shrink-0 bg-input-bg border border-input-border rounded-lg text-[#e5e5ea] px-2.5 py-1.5 text-[13px] outline-none focus:border-accent"
+        local renderVal = val
+        local placeholder = s.placeholder
+        if s.key == "openaikey" then
+            -- SECURITY: never emit the real API key into the DOM. Blank field == "keep existing".
+            renderVal = ""
+            local hasKey = (val ~= nil and val ~= "" and tostring(val) ~= "未設定")
+            placeholder = hasKey and "保存済み（変更する場合のみ入力）" or "sk-..."
+        end
+        -- For the API key, offer a '削除' affordance: a blank field means
+        -- "keep existing", so removing the key needs an explicit clear marker.
+        local clearBtn = ""
+        if s.key == "openaikey" then
+            clearBtn = table.concat({
+                '    <button type="button"',
+                '      class="shrink-0 bg-transparent text-accent-red border border-input-border rounded-lg px-2 py-1.5 text-[12px] cursor-pointer hover:border-accent-red"',
+                '      onclick="clearApiKey(this)">削除</button>',
+            }, "\n")
+        end
         table.insert(aiRows, table.concat({
             '<div class="flex items-center justify-between py-2.5 border-b border-surface-border gap-4 last:border-b-0">',
             '  <div class="flex-1 min-w-0">',
             '    <span class="block font-medium text-label">', s.label, '</span>',
             '    <span class="block text-[11px] text-label-dim mt-px">', s.desc, '</span>',
             '  </div>',
+            '  <div class="flex items-center gap-2 shrink-0">',
             '  <input type="text" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"',
             '    class="', inputClass, '"',
-            '    data-key="', s.key, '" value="', escapeHtmlAttr(val), '"',
-            '    placeholder="', s.placeholder, '"',
+            '    data-key="', s.key, '" value="', escapeHtmlAttr(renderVal), '"',
+            '    placeholder="', escapeHtmlAttr(placeholder), '"',
             '    oninput="markDirty()">',
+            clearBtn,
+            '  </div>',
             '</div>',
         }, "\n"))
     end
 
     -- ── JavaScript ──────────────────────────────────────────────────────
+    -- JSON-encode the clear marker so it is a safe, properly-quoted JS string literal.
+    local CLEAR_MARKER_JS = "'__CLEAR_OPENAIKEY__'"
+    local okEnc, encMarker = pcall(hs.json.encode, CLEAR_OPENAIKEY_MARKER)
+    if okEnc and type(encMarker) == "string" then
+        CLEAR_MARKER_JS = encMarker
+    end
     local js = table.concat({
         "var dirty = false;",
         "function markDirty() {",
-        "  dirty = true;",
+        "  setDirty(true);",
+        "}",
+        "// '削除' affordance for the API key: a blank field means 'keep existing',",
+        "// so clearing the key needs an explicit marker Lua maps to the default sentinel.",
+        "function clearApiKey(btn) {",
+        "  var el = document.querySelector('[data-key=\"openaikey\"]');",
+        "  if (!el) return;",
+        "  el.value = " .. CLEAR_MARKER_JS .. ";",
+        "  el.placeholder = '削除されます';",
+        "  markDirty();",
+        "}",
+        "function showToast(text, ok) {",
+        "  var t = document.getElementById('toast');",
+        "  if (!t) return;",
+        "  t.textContent = text;",
+        "  t.classList.remove('bg-accent-green', 'bg-accent-red', 'text-black', 'text-white');",
+        "  if (ok) { t.classList.add('bg-accent-green', 'text-black'); }",
+        "  else { t.classList.add('bg-accent-red', 'text-white'); }",
+        "  t.classList.remove('opacity-0');",
+        "  t.classList.add('opacity-100');",
+        "}",
+        "function hideToast() {",
+        "  var t = document.getElementById('toast');",
+        "  if (!t) return;",
+        "  t.classList.remove('opacity-100');",
+        "  t.classList.add('opacity-0');",
+        "}",
+        "function setDirty(d) {",
+        "  dirty = d;",
         "  var btn = document.getElementById('saveBtn');",
-        "  btn.classList.remove('opacity-40', 'pointer-events-none');",
-        "  btn.classList.add('opacity-100', 'cursor-pointer');",
+        "  if (!btn) return;",
+        "  if (d) {",
+        "    btn.classList.remove('opacity-40', 'pointer-events-none');",
+        "    btn.classList.add('opacity-100', 'cursor-pointer');",
+        "  } else {",
+        "    btn.classList.add('opacity-40', 'pointer-events-none');",
+        "    btn.classList.remove('opacity-100', 'cursor-pointer');",
+        "  }",
+        "}",
+        "// Called from Lua via evaluateJavaScript once the write outcome is known.",
+        "function saveResult(ok, message) {",
+        "  // Bump the save token so a real Lua reply cancels any pending watchdog timer.",
+        "  window._saveTok = (window._saveTok||0)+1;",
+        "  if (ok) {",
+        "    showToast(message || '保存しました', true);",
+        "    setDirty(false);",
+        "  } else {",
+        "    showToast(message || '保存に失敗しました', false);",
+        "    setDirty(true);",
+        "    setTimeout(hideToast, 3000);",
+        "  }",
         "}",
         "function saveSettings() {",
-        "  var masked = [];",
-        "  document.querySelectorAll('.api-key-mask').forEach(function(el) {",
-        "    masked.push(el); el.classList.remove('api-key-mask');",
-        "  });",
-        "  void document.body.offsetHeight;",
         "  var settings = {};",
         "  document.querySelectorAll('[data-key]').forEach(function(el) {",
         "    var k = el.getAttribute('data-key');",
@@ -201,17 +279,16 @@ local function buildSettingsHTML()
         "      settings[k] = el.value;",
         "    }",
         "  });",
-        "  masked.forEach(function(el) { el.classList.add('api-key-mask'); });",
         "  // Always stringify: WKWebView → Lua is most reliable as JSON text (nested dicts can break pairs()/keys).",
         "  window.webkit.messageHandlers.lesmessages.postMessage(JSON.stringify({ action: 'save', data: settings }));",
+        "  // Neutral 'saving' state; the Lua callback reports success/failure via saveResult().",
         "  var btn = document.getElementById('saveBtn');",
-        "  btn.classList.add('opacity-40', 'pointer-events-none');",
-        "  btn.classList.remove('opacity-100', 'cursor-pointer');",
-        "  dirty = false;",
-        "  var t = document.getElementById('toast');",
-        "  t.classList.remove('opacity-0');",
-        "  t.classList.add('opacity-100');",
-        "  setTimeout(function() { t.classList.remove('opacity-100'); t.classList.add('opacity-0'); }, 2000);",
+        "  if (btn) { btn.classList.add('opacity-40', 'pointer-events-none'); btn.classList.remove('opacity-100', 'cursor-pointer'); }",
+        "  showToast('保存中...', true);",
+        "  // Watchdog: a dropped/garbled WK bridge message must not hang the UI forever.",
+        "  // A real Lua reply bumps window._saveTok via saveResult(), which cancels this.",
+        "  window._saveTok = (window._saveTok||0)+1; var t = window._saveTok;",
+        "  setTimeout(function(){ if (window._saveTok === t) saveResult(false, '保存に失敗しました（応答なし）'); }, 5000);",
         "}",
     }, "\n")
 
@@ -219,7 +296,10 @@ local function buildSettingsHTML()
     return table.concat({
         "<!DOCTYPE html><html><head>",
         "<meta charset='UTF-8'>",
-        "<style>", css, "\n.api-key-mask { -webkit-text-security: disc; }\n</style>",
+        "<style>", css,
+        "\n.bg-accent-red { background-color: #ff453a; }",
+        "\n.text-accent-red { color: #ff453a; }",
+        "\n.hover\\:border-accent-red:hover { border-color: #ff453a; }\n</style>",
         "</head>",
         "<body class='bg-surface text-[#e5e5ea] text-[13px] leading-snug font-[-apple-system,BlinkMacSystemFont,sans-serif]'>",
 
@@ -327,9 +407,22 @@ local function collectGuiPatchFromData(data)
         if v == nil then
             v = data[k]
         end
-        if v ~= nil then
-            patch[k] = v
+        if v == nil then
+            return
         end
+        if k == "openaikey" then
+            local trimmed = tostring(v):gsub("^%s*(.-)%s*$", "%1")
+            if trimmed == CLEAR_OPENAIKEY_MARKER then
+                -- Explicit '削除' click: clear the key by writing the default sentinel.
+                patch[k] = "未設定"
+                return
+            end
+            -- Blank/whitespace-only means "keep existing"; '未設定' sentinel must never enter the patch.
+            if trimmed == "" or trimmed == "未設定" then
+                return
+            end
+        end
+        patch[k] = v
     end
     for _, row in ipairs(TOGGLE_DEFS) do
         pullKey(row.key)
@@ -341,17 +434,46 @@ local function collectGuiPatchFromData(data)
         pullKey(row.key)
     end
     pullKey("pianorollmacro")
-    for k, v in pairs(canon) do
+    for k in pairs(canon) do
         if type(k) == "string" and type(settingsManager[k]) == "table" and patch[k] == nil then
-            patch[k] = v
+            -- Route through pullKey so openaikey blank/sentinel handling applies here too.
+            pullKey(k)
         end
     end
     return patch
 end
 
+--- Report a save outcome back to the webview's JS saveResult() handler.
+---@param ok boolean whether the write succeeded
+---@param message string|nil toast text to display
+---@return nil
+local function reportSaveResult(ok, message)
+    if settingsWebview == nil then
+        return
+    end
+    local okFlag = ok and "true" or "false"
+    -- JSON-encode the message so quotes/newlines cannot break out of the JS string literal.
+    local msgJson = "''"
+    if message ~= nil then
+        local encOk, enc = pcall(hs.json.encode, tostring(message))
+        if encOk and type(enc) == "string" then
+            msgJson = enc
+        end
+    end
+    local jsCode = "if (typeof saveResult === 'function') { saveResult(" .. okFlag .. ", " .. msgJson .. "); }"
+    pcall(function()
+        settingsWebview:evaluateJavaScript(jsCode)
+    end)
+end
+
 --- Open the settings GUI webview panel.
 --- Saves via settingsManager:writeFromGui() then calls reloadLES().
 function openSettingsGUI()
+    -- Cancel any pending teardown so reopening within the reload window is never destroyed.
+    if pendingReloadTimer ~= nil then
+        pcall(function() pendingReloadTimer:stop() end)
+        pendingReloadTimer = nil
+    end
     -- Destroy any previous instance
     if settingsWebview ~= nil then
         settingsWebview:delete()
@@ -393,6 +515,7 @@ function openSettingsGUI()
                     .. tostring(type(data))
                     .. ")"
             )
+            reportSaveResult(false, "保存できませんでした（フォームの値を認識できません）")
             HSMakeAlert(
                 programName,
                 "設定を保存できませんでした（フォームの値を認識できません）。\nコンソールの [settingsgui] ログを確認してください。",
@@ -424,6 +547,8 @@ function openSettingsGUI()
             print("[settingsgui] save: calling writeFromGui with", patchCount, "keys")
             local okWrite = settingsManager:writeFromGui(patch)
             if not okWrite then
+                -- Report failure to the GUI: red toast, keep dirty=true and the button enabled.
+                reportSaveResult(false, "保存に失敗しました（設定ファイルへ書き込めません）")
                 HSMakeAlert(
                     programName,
                     "設定ファイルへ書き込めませんでした（権限またはディスク容量を確認してください）。\n"
@@ -433,6 +558,20 @@ function openSettingsGUI()
                 )
                 return
             end
+            -- Success: green toast (superseded by the imminent reload).
+            reportSaveResult(true, string.format("保存しました（%d 項目）", patchCount))
+            -- Apply settings IMMEDIATELY. reloadLES() runs in-VM (it rebuilds config
+            -- in-process and does NOT call hs.reload()), so the apply must not depend
+            -- on whether the panel is reopened within the cosmetic teardown window.
+            local okReload, errReload = pcall(reloadLES)
+            if not okReload then
+                print("[settingsgui] reloadLES() error: " .. tostring(errReload))
+                pcall(function()
+                    settingsManager:init()
+                    settingsManager:parse()
+                    settingsManager:map()
+                end)
+            end
             pcall(function()
                 if hs.notify then
                     hs.notify
@@ -440,15 +579,25 @@ function openSettingsGUI()
                         :send()
                 end
             end)
-            -- Close and reload after a short delay so the toast is visible
-            hs.timer.doAfter(0.6, function()
-                if settingsWebview ~= nil then
-                    settingsWebview:delete()
+            -- Cosmetic teardown only: delete the webview after a short delay so the
+            -- toast stays visible. The apply (reloadLES) already happened above.
+            if pendingReloadTimer ~= nil then
+                pcall(function() pendingReloadTimer:stop() end)
+                pendingReloadTimer = nil
+            end
+            local wv = settingsWebview
+            pendingReloadTimer = hs.timer.doAfter(0.6, function()
+                pendingReloadTimer = nil
+                if wv then
+                    pcall(function() wv:delete() end)
+                end
+                if settingsWebview == wv then
                     settingsWebview = nil
                 end
-                reloadLES()
             end)
         else
+            -- Empty patch: report failure to the GUI, keep dirty=true and the button enabled.
+            reportSaveResult(false, "保存できませんでした（有効な設定キーがありません）")
             HSMakeAlert(
                 programName,
                 "設定を保存できませんでした（有効な設定キーがありません）。\n"
