@@ -43,12 +43,19 @@ end
 function pluginStats.save(data)
     ShellCreateDirectory(ScriptUserResourcesPath)
     local path = statsFilePath()
-    local json = hs.json.encode(data, true)
-    local f = io.open(path, "w")
-    if f then
-        f:write(json)
-        f:close()
+    -- Guard the encode (nil on a bad table would otherwise truncate the file)
+    -- and write atomically via a temp file + rename.
+    local ok, json = pcall(hs.json.encode, data, true)
+    if not ok or type(json) ~= "string" then return end
+    local tmp = path .. ".tmp"
+    local f = io.open(tmp, "w")
+    if not f then return end
+    f:write(json)
+    if not f:close() then
+        os.remove(tmp)
+        return
     end
+    os.rename(tmp, path)
 end
 
 --- Record a plugin use event.
@@ -56,20 +63,26 @@ end
 ---@param pluginName string  The display name of the plugin
 function pluginStats.recordUse(pluginName)
     if not pluginName or pluginName == "" then return end
-    local data = pluginStats.load()
-    local now = math.floor(hs.timer.secondsSinceEpoch())
-    local entry = data[pluginName]
-    if entry then
-        entry.last_used_at = now
-        entry.use_count = (entry.use_count or 0) + 1
-    else
-        data[pluginName] = {
-            added_at     = now,
-            last_used_at = now,
-            use_count    = 1,
-        }
-    end
-    pluginStats.save(data)
+    -- Defer the read/modify/write off the plugin-insertion hot path (it runs
+    -- from loadPlugin on every insert). The return value is never used, so
+    -- running on the next run-loop tick costs nothing and removes the
+    -- synchronous file I/O latency from the user's click.
+    hs.timer.doAfter(0, function()
+        local data = pluginStats.load()
+        local now = math.floor(hs.timer.secondsSinceEpoch())
+        local entry = data[pluginName]
+        if entry then
+            entry.last_used_at = now
+            entry.use_count = (entry.use_count or 0) + 1
+        else
+            data[pluginName] = {
+                added_at     = now,
+                last_used_at = now,
+                use_count    = 1,
+            }
+        end
+        pluginStats.save(data)
+    end)
 end
 
 --- Get stats for a single plugin. Returns nil if not tracked.

@@ -60,7 +60,9 @@ function showStatusHUD(state, ttl)
     local duration = (ttl ~= nil) and ttl or HUD_TTL
 
     -- Position: top-right corner, just below the menu bar (~28 px)
-    local sf = hs.screen.mainScreen():frame()
+    local screen = hs.screen.mainScreen()
+    if screen == nil then return end  -- no active display (e.g. all asleep)
+    local sf = screen:frame()
     local x  = sf.x + sf.w - HUD_W - HUD_PADDING
     local y  = sf.y + 28
 

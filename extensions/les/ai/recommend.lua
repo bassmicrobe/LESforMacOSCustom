@@ -147,6 +147,16 @@ function setContent(html) {
 function setMarkdown(text) {
     setContent('<div class="result">' + mdToHtml(text) + '</div>');
 }
+function setError(msg) {
+    // Render error text via textContent so an API/proxy-supplied message can
+    // never inject markup into innerHTML (the error string is externally controlled).
+    var c = document.getElementById('content');
+    c.innerHTML = '';
+    var d = document.createElement('div');
+    d.className = 'error';
+    d.textContent = msg;
+    c.appendChild(d);
+}
 function ask() {
     var extra = document.getElementById('inp').value.trim();
     document.getElementById('inp').value = '';
@@ -186,7 +196,7 @@ local function fetchRecommendations(extra)
             local errMsg = err or "空の応答が返されました"
             print("[LES][ai.recommend] reply error: " .. tostring(errMsg))
             _webview:evaluateJavaScript(
-                string.format("setContent('<div class=\"error\">%s</div>');", jsEscape(errMsg)))
+                string.format("setError('%s');", jsEscape(errMsg)))
         else
             _webview:evaluateJavaScript(
                 string.format("setMarkdown('%s');", jsEscape(reply)))

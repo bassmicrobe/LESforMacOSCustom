@@ -24,9 +24,14 @@ local keyHandler = function(e)
         hs.eventtap.event.newMouseEvent(hs.eventtap.event.types["leftMouseDown"], point):setProperty(clickState, 1)
             :post()
         hs.eventtap.event.newMouseEvent(hs.eventtap.event.types["leftMouseUp"], point):setProperty(clickState, 1):post()
-        hs.timer.usleep(6000)
-        hs.eventtap.event.newMouseEvent(hs.eventtap.event.types["leftMouseDown"], point):setProperty(clickState, 2)
-            :post()
+        -- Defer the clickState=2 mousedown by ~6ms WITHOUT blocking the main
+        -- thread. keyHandler runs as a synchronous eventtap callback, so the old
+        -- hs.timer.usleep(6000) stalled the run loop on every click. The gap is
+        -- load-bearing: macOS needs it to register the synthetic double-click.
+        hs.timer.doAfter(0.006, function()
+            hs.eventtap.event.newMouseEvent(hs.eventtap.event.types["leftMouseDown"], point):setProperty(clickState, 2)
+                :post()
+        end)
     elseif buttonstate == false and _G.buttonstatevar == true then
         _G.buttonstatevar = false
         local point = hs.mouse.absolutePosition()

@@ -50,8 +50,21 @@ function projectnotes.load(projectName)
     f:close()
     if not raw or raw == "" then return {} end
     local ok, data = pcall(hs.json.decode, raw)
-    if ok and type(data) == "table" then return data end
-    return {}
+    if not (ok and type(data) == "table") then return {} end
+    -- The notes file is an untrusted boundary (may be hand-edited or written by
+    -- another tool). Keep only well-formed records with a numeric timestamp and
+    -- coerce body to a string, so downstream os.date/string.format/gsub can
+    -- never throw on a malformed entry and brick the whole panel.
+    local cleaned = {}
+    for _, n in ipairs(data) do
+        if type(n) == "table" then
+            local ts = math.floor(tonumber(n.timestamp) or 0)
+            if ts > 0 then
+                cleaned[#cleaned + 1] = { timestamp = ts, body = tostring(n.body or "") }
+            end
+        end
+    end
+    return cleaned
 end
 
 --- Save notes for a project.
@@ -60,12 +73,21 @@ end
 function projectnotes.save(projectName, notes)
     ShellCreateDirectory(notesDir())
     local path = notesFilePath(projectName)
-    local json = hs.json.encode(notes, true)
-    local f = io.open(path, "w")
-    if f then
-        f:write(json)
-        f:close()
+    -- Guard the encode: hs.json.encode can return nil on a bad table, which the
+    -- old code would happily write (truncating the file). Bail instead.
+    local ok, json = pcall(hs.json.encode, notes, true)
+    if not ok or type(json) ~= "string" then return end
+    -- Atomic write: encode to a temp file then rename over the target so an
+    -- interrupted/failed write never leaves truncated/corrupt notes behind.
+    local tmp = path .. ".tmp"
+    local f = io.open(tmp, "w")
+    if not f then return end
+    f:write(json)
+    if not f:close() then
+        os.remove(tmp)
+        return
     end
+    os.rename(tmp, path)
 end
 
 --- Append a new note entry.
@@ -112,7 +134,7 @@ end
 local function buildNotesHTML(projectName, notes)
     local displayName = (projectName == "unsaved_project")
         and "未保存のプロジェクト"
-        or projectName:gsub("_", " ")
+        or escapeHTML((projectName:gsub("_", " ")))
 
     -- Build timeline entries (newest first)
     local items = {}

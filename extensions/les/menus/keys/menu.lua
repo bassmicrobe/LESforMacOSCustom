@@ -69,7 +69,7 @@ ShiftDoubleRightClickMenu = {{
         }, {
             title = "Minor Pentatonic",
             fn = function()
-                _G.stampselect = Blues
+                _G.stampselect = MinorPentatonic
             end
         }, {
             title = "Major Blues",

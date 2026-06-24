@@ -24,6 +24,10 @@ function ShellExec(command)
     -- injection hazard (an embedded single quote would break out of the wrapper).
     -- Callers must therefore keep their commands POSIX-portable (no zsh-isms).
     local handle = io.popen(command)
+    if handle == nil then
+        print("ShellExec: io.popen failed for command: " .. tostring(command))
+        return { command = command, stdout = "", ["return"] = -1 }
+    end
     local result = handle:read("*a")
     local _return = {handle:close()}
     print("Executed shell command " .. command .. " with return status " .. tostring(_return[3]))

@@ -353,11 +353,34 @@ function settingsManager.init(self, _depth)
       return
     end
 
-    -- Backup current settings file
-    ShellCopy(
-      strJoinPaths(ScriptUserPath, "settings.ini"),
-      strJoinPaths(ScriptUserPath, string.format("settings_%d.ini", math.floor(hs.timer.secondsSinceEpoch())))
-    )
+    -- Backup current settings file. Only when it exists (avoids spamming an
+    -- empty timestamped backup on first run), secure the copy to 600 (it holds
+    -- the OpenAI key and ShellCopy writes at the default umask = 644), and prune
+    -- old backups so they cannot accumulate without bound.
+    local srcPath = strJoinPaths(ScriptUserPath, "settings.ini")
+    if ioIsFilePresent(srcPath) then
+      local backupPath = strJoinPaths(ScriptUserPath,
+        string.format("settings_%d.ini", math.floor(hs.timer.secondsSinceEpoch())))
+      ShellCopy(srcPath, backupPath)
+      if type(SetSecureFileMode) == "function" then SetSecureFileMode(backupPath) end
+
+      -- Keep only the 5 most recent settings_<epoch>.ini backups. Index hs.fs
+      -- INSIDE the pcall closure so a missing hs.fs (e.g. test env) is caught
+      -- rather than thrown while evaluating the argument.
+      local ok, iter = pcall(function() return hs.fs.dir(ScriptUserPath) end)
+      if ok and iter then
+        local backups = {}
+        for file in iter do
+          if type(file) == "string" and file:match("^settings_%d+%.ini$") then
+            backups[#backups + 1] = file
+          end
+        end
+        table.sort(backups)  -- fixed-width epoch names sort chronologically
+        for i = 1, #backups - 5 do
+          os.remove(strJoinPaths(ScriptUserPath, backups[i]))
+        end
+      end
+    end
 
     -- Write defaults to settings file in memory
     for _, skey in ipairs(valuesPending) do

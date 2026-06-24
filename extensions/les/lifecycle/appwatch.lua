@@ -91,6 +91,11 @@ function appwatch(name, event, app)
             clock:stop()
         end
         coolfunc()
+        -- Live is gone: drop the cached app object (otherwise getLiveHsAppObj
+        -- hands back a dead handle for up to the cache TTL) and the valid-titles
+        -- cache (so a different Live version re-populates it on next use).
+        invalidateLiveAppCache()
+        if type(invalidateValidTitlesCache) == "function" then invalidateValidTitlesCache() end
         print("Live was quit")
         return
     end

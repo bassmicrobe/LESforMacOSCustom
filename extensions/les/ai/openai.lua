@@ -55,7 +55,13 @@ function openai.chat(messages, callback)
 
     hs.http.asyncPost(API_URL, payload, headers, function(status, body, _)
         if status ~= 200 then
-            local errMsg = "API エラー (HTTP " .. tostring(status) .. ")"
+            local errMsg
+            if type(status) ~= "number" or status <= 0 then
+                -- hs.http reports transport/connection failures as status <= 0
+                errMsg = "ネットワークエラー: OpenAI に接続できませんでした。インターネット接続を確認してください。"
+            else
+                errMsg = "API エラー (HTTP " .. tostring(status) .. ")"
+            end
             local ok, decoded = pcall(hs.json.decode, body or "")
             if ok and type(decoded) == "table" and decoded.error then
                 errMsg = errMsg .. ": " .. (decoded.error.message or "")
