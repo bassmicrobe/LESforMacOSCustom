@@ -38,10 +38,14 @@ LESforMacOS Custom は Live Enhancement Suite Custom の macOS 版です。[Hamm
 | ウィンドウ管理 | ウィンドウの閉じる・切替操作 | `Ctrl+W` |
 | カスタムメニュー | メニューバーからの操作 | メニューバーアイコン |
 | プラグイン検索 | Spotlight 風プラグイン検索 + お気に入り | `Cmd+Shift+H` |
-| プロジェクトメモ | タイムライン形式のメモ | メニューバー |
+| プラグインメニュー設定 | カテゴリ別のプラグインメニューを GUI で編集 | メニューバー |
+| プラグインスキャン | VST3 / AU を自動検出してメニューを生成 | メニューバー |
+| プロジェクトメモ | プロジェクト単位のタイムライン形式メモ | メニューバー |
+| トラックメモ | トラック単位のメモ（トラック名の自動検出対応） | メニューバー |
 | ショートカット一覧 | 全ショートカットのオーバーレイ表示 | `Cmd+Shift+/` |
 | AI アシスタント | 音楽制作 AI チャット (OpenAI) | `Cmd+Shift+A` |
 | AI プラグイン提案 | 使用統計ベースのプラグイン推薦 | メニューバー |
+| AI トラック名生成 | トラック名を AI が提案 | メニューバー |
 | macOS 通知連携 | エクスポート完了 / 作業時間通知 | 自動 |
 
 ### 設定
@@ -53,6 +57,11 @@ LESforMacOS Custom は Live Enhancement Suite Custom の macOS 版です。[Hamm
 - `saveasnewver` — Cmd+Alt+S でバージョン保存
 - `enabledebug` — デバッグコンソールを有効化
 - `texticon` — メニューバーにテキスト "LES" を表示
+- `loadspeed` — プラグイン挿入時の待機速度
+- `language` — UI 言語（`ja` / `en`）
+- `openaikey` / `openaimodel` — AI 機能で使う OpenAI API キー / モデル（設定 → AI 設定 で入力）
+
+> API キーを含む設定ファイルはパーミッション `600`（所有者のみ読み書き可）で保存されます。
 
 ## プロジェクト構成
 
@@ -73,7 +82,7 @@ LESforMacOSCustom/
 │       ├── menus/            # メニューバー UI・設定 GUI
 │       ├── ui/               # チートシート・HUD
 │       ├── lifecycle/        # リロード・アプリ監視
-│       ├── tracking/         # タイマー・通知・プロジェクトメモ
+│       ├── tracking/         # タイマー・通知・プロジェクト/トラックメモ・プラグイン統計
 │       ├── vst/              # VST プラグイン操作
 │       └── tests/            # busted テストスイート
 ├── Pods/                     # CocoaPods 依存関係
