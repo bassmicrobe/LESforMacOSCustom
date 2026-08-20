@@ -47,6 +47,8 @@ WORKDIR /app
 
 # Lua ソースとテスト
 COPY .luacheckrc ./
+COPY README.md ./README.md
+COPY docs/ ./docs/
 COPY extensions/_coresetup/_coresetup.lua ./extensions/_coresetup/_coresetup.lua
 COPY extensions/les/ ./extensions/les/
 COPY scripts/run-lua-tests.sh /usr/local/bin/run-lua-tests
