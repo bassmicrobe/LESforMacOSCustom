@@ -274,15 +274,20 @@ export CI_ARTIFACTS_HOME="${HAMMERSPOON_HOME}/artifacts"
 export HAMMERSPOON_BUNDLE_NAME="${APP_NAME}.app"
 export HAMMERSPOON_BUNDLE_PATH="${BUILD_HOME}/${HAMMERSPOON_BUNDLE_NAME}"
 export HAMMERSPOON_XCARCHIVE_PATH="${HAMMERSPOON_BUNDLE_PATH}.xcarchive"
-XCODE_CONFIG_ARGS=()
+XCODE_BUILT_PRODUCTS_ARGS=(
+    -workspace Hammerspoon.xcworkspace
+    -scheme "${XCODE_SCHEME}"
+    -configuration "${XCODE_CONFIGURATION}"
+    -destination "platform=macOS"
+)
 if [ -n "${XCCONFIG_FILE}" ]; then
     if [ ! -f "${XCCONFIG_FILE}" ]; then
         echo "ERROR: xcconfig file does not exist: ${XCCONFIG_FILE}" >&2
         exit 1
     fi
-    XCODE_CONFIG_ARGS=(-xcconfig "${XCCONFIG_FILE}")
+    XCODE_BUILT_PRODUCTS_ARGS+=(-xcconfig "${XCCONFIG_FILE}")
 fi
-export XCODE_BUILT_PRODUCTS_DIR ; XCODE_BUILT_PRODUCTS_DIR="$(xcodebuild -workspace Hammerspoon.xcworkspace -scheme "${XCODE_SCHEME}" -configuration "${XCODE_CONFIGURATION}" -destination "platform=macOS" "${XCODE_CONFIG_ARGS[@]}" -showBuildSettings | sort | uniq | grep ' BUILT_PRODUCTS_DIR =' | awk '{ print $3 }')"
+export XCODE_BUILT_PRODUCTS_DIR ; XCODE_BUILT_PRODUCTS_DIR="$(xcodebuild "${XCODE_BUILT_PRODUCTS_ARGS[@]}" -showBuildSettings | sort | uniq | grep ' BUILT_PRODUCTS_DIR =' | awk '{ print $3 }')"
 export DOCS_SEARCH_DIRS=("Hammerspoon" "extensions/")
 
 # Calculate private token variables

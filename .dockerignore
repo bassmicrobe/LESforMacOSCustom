@@ -2,6 +2,9 @@
 !.luacheckrc
 !scripts/
 !scripts/run-lua-tests.sh
+!README.md
+!docs/
+!docs/**
 !extensions/
 !extensions/_coresetup/
 !extensions/_coresetup/_coresetup.lua
