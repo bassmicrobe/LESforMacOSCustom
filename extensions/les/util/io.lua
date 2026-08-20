@@ -10,12 +10,12 @@
 function fileToTable(filePath, retTable)
   local fileHdl = io.open(filePath, "r")
   if not fileHdl then
-    return
+    return false
   end
   for _line in fileHdl:lines() do
     table.insert(retTable, _line)
   end
-  fileHdl:close()
+  return fileHdl:close() ~= false
 end
 
 -- Converts an index table into a newline-seperated file.

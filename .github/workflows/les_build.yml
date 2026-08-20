@@ -1,37 +1,49 @@
 name: Build
-on: push
+
+on:
+  push:
+    branches-ignore:
+      - develop
+    tags-ignore:
+      - 'v*'
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   build:
+    name: Release build smoke test
     runs-on: macos-14
-    env:
-        DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
     steps:
-      - name: Cloning Git repository
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          submodules: 'recursive'
-      - name: Setup Cocoapods
-        uses: maxim-lobanov/setup-cocoapods@v1
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
-          podfile-path: Podfile.lock
-      - name: Setup Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '3.3'
-      - name: Install dependencies
-        run: |
-          brew install coreutils jq xcbeautify gawk gh gpg
-          pip3 install --user --break-system-packages --disable-pip-version-check -r requirements.txt
-          gem install --user t
-          gem install trainer
-      - name: Attempt to build the Live Enhancement Suite Custom for macOS
+          xcode-version: '15.4'
+
+      - name: Build release configuration
         shell: bash
         run: |
+          set -euo pipefail
           LOG_NAME="build_$(date +%s).log"
-          XCODE_ARGS="GCC_INSTRUMENT_PROGRAM_FLOW_ARCS=NO GCC_TREAT_WARNINGS_AS_ERRORS=NO CLANG_ENABLE_CODE_COVERAGE=NO"
-          XCODE_ARGS+=" -enableAddressSanitizer NO -enableThreadSanitizer NO -enableUndefinedBehaviorSanitizer NO"
-          XCODE_ARGS+=" SDKROOT=${DEVELOPER_DIR}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX14.5.sdk"
-          XCODE_ARGS+=" MACOSX_DEPLOYMENT_TARGET=11.0"
-          xcodebuild -workspace Hammerspoon.xcworkspace -scheme Release -configuration Release -destination platform=macOS build ${XCODE_ARGS} | \
-            tee ${LOG_NAME} | \
-            xcbeautify && exit ${PIPESTATUS[0]}
+          xcodebuild \
+            -workspace Hammerspoon.xcworkspace \
+            -scheme Release \
+            -configuration Release \
+            -destination platform=macOS \
+            GCC_INSTRUMENT_PROGRAM_FLOW_ARCS=NO \
+            GCC_TREAT_WARNINGS_AS_ERRORS=NO \
+            CLANG_ENABLE_CODE_COVERAGE=NO \
+            MACOSX_DEPLOYMENT_TARGET=12.0 \
+            build | tee "${LOG_NAME}"

@@ -6,6 +6,13 @@ on:
       - develop
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build and Test
@@ -16,13 +23,14 @@ jobs:
       IS_CI: 1
 
     steps:
-      - uses: maxim-lobanov/setup-xcode@v1
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
           xcode-version: 15.4
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Prepare environment
         run: ./scripts/github-ci-pre.sh
@@ -31,7 +39,7 @@ jobs:
         run: ./scripts/github-ci-testbuild.sh
       - name: Upload artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: build.log
           path: artifacts/build.log
@@ -42,14 +50,28 @@ jobs:
 
       - name: Upload artifacts (test log)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: test.log
           path: artifacts/test.log
       - name: Upload artifacts (test results)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: test_results
           path: build/reports/junit.xml
 
+  lua:
+    name: Lua tests and lint
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Build test image
+        run: docker build -f Dockerfile.test -t les-lua-test .
+
+      - name: Run Lua checks
+        run: docker run --rm les-lua-test

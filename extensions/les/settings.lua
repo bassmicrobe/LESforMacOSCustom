@@ -37,7 +37,7 @@ settingsManager = {
                                   ["desc"] = { "Maps the absolute duplicate shortcut to Cmd + Ctrl + D if you don't want to disable or",
                                                "overwrite the default dock hide/unhide shortcut on Preferences > Keyboard > Shortcuts" } },
   ["enableclosewindow"]       = { ["value"] = nil, ["default"] = "1"  , ["type"] = "bin",
-                                  ["desc"] = { "Toggles the Ctrl + W and Ctrl + Shift + W shortcuts" } },
+                                  ["desc"] = { "Toggles Cmd+W and Cmd+Alt+W (or Cmd+Alt+Esc) for plugin windows" } },
   ["vstshortcuts"]            = { ["value"] = nil, ["default"] = "1"  , ["type"] = "bin",
                                   ["desc"] = { "Toggles the suite of VST specific shortcuts" } },
   ["dynamicreload"]           = { ["value"] = nil, ["default"] = "0"  , ["type"] = "bin",
@@ -300,11 +300,24 @@ end
 --- helpers (C4) live in helpers.lua, which is required before settings; guard
 --- with type()=="function" so settings still loads if they aren't present yet.
 local function secureSettingsFiles()
-  if type(SetSecureFileMode) == "function" then
-    SetSecureFileMode(GetDataPath(ConfigFile))
-  end
   if type(SetSecureDirMode) == "function" then
     SetSecureDirMode(ScriptUserPath)
+  end
+  if type(SetSecureFileMode) == "function" and ioIsFilePresent(GetDataPath(ConfigFile)) then
+    SetSecureFileMode(GetDataPath(ConfigFile))
+  end
+
+  -- Older versions created timestamped backups using the default umask. Secure
+  -- every retained backup as well so an API key cannot remain group-readable.
+  if type(SetSecureFileMode) == "function" then
+    local ok, iter = pcall(function() return hs.fs.dir(ScriptUserPath) end)
+    if ok and iter then
+      for file in iter do
+        if type(file) == "string" and file:match("^settings_%d+%.ini$") then
+          SetSecureFileMode(strJoinPaths(ScriptUserPath, file))
+        end
+      end
+    end
   end
 end
 
@@ -319,12 +332,15 @@ function settingsManager.init(self, _depth)
   _depth = _depth or 0
   -- Clear loaded values because we could be called multiple times
   self:bind()
+  ShellCreateDirectory(ScriptUserPath)
 
   -- Create new settings file if it doesn't exist
   if ioIsFilePresent(GetDataPath(ConfigFile)) == false then
     ShellCreateEmptyFile(GetDataPath(ConfigFile))
-    secureSettingsFiles()
   end
+  -- Apply permissions on every startup, including already-valid files created
+  -- by older versions where no write/backfill would otherwise occur.
+  secureSettingsFiles()
 
   -- Read settings file and load it (always under ~/.les/, never CWD-relative)
   local settingsFile = {}

@@ -7,6 +7,8 @@ local namegen = {}
 
 ---@type hs.chooser|nil
 local _chooser = nil
+local _requestGeneration = 0
+local _requestPending = false
 
 --- Gather context for name generation.
 ---@return string
@@ -15,7 +17,7 @@ local function gatherContext()
 
     -- Current project name
     if _G.trackname and _G.trackname ~= "" then
-        parts[#parts + 1] = "現在のプロジェクト名: " .. _G.trackname
+        parts[#parts + 1] = string.format(L("namegen_context_project"), _G.trackname)
     end
 
     -- Project notes (last 5)
@@ -28,7 +30,7 @@ local function gatherContext()
             for i = start, #notes do
                 recent[#recent + 1] = "- " .. notes[i].body
             end
-            parts[#parts + 1] = "最近のプロジェクトメモ:\n" .. table.concat(recent, "\n")
+            parts[#parts + 1] = string.format(L("namegen_context_notes"), table.concat(recent, "\n"))
         end
     end
 
@@ -46,12 +48,12 @@ local function gatherContext()
             for i = 1, math.min(5, #sorted) do
                 top[#top + 1] = sorted[i].name
             end
-            parts[#parts + 1] = "よく使うプラグイン: " .. table.concat(top, ", ")
+            parts[#parts + 1] = string.format(L("namegen_context_plugins"), table.concat(top, ", "))
         end
     end
 
     if #parts == 0 then
-        return "コンテキスト情報なし。一般的な音楽プロジェクト名を提案してください。"
+        return L("namegen_context_empty")
     end
     return table.concat(parts, "\n\n")
 end
@@ -62,56 +64,75 @@ end
 function namegen.open(userHint)
     if not openai.isConfigured() then
         HSMakeAlert(programName,
-            "AI 名前ジェネレーターを使うには、設定画面で OpenAI API キーを入力してください。",
+            L("namegen_config_required"),
             true, "warning")
         return
     end
 
-    -- Show a temporary chooser with loading state
-    if _chooser then _chooser:delete() end
-    _chooser = hs.chooser.new(function(choice)
-        if not choice then return end
+    if _chooser and _requestPending then
+        _chooser:show()
+        return
+    end
+
+    -- Show a temporary chooser with loading state. Clear the module reference
+    -- before deleting the previous chooser because delete() can synchronously
+    -- invoke its cancellation callback.
+    local previousChooser = _chooser
+    _chooser = nil
+    _requestGeneration = _requestGeneration + 1
+    local requestGeneration = _requestGeneration
+    if previousChooser then previousChooser:delete() end
+
+    local requestChooser
+    requestChooser = hs.chooser.new(function(choice)
+        if _chooser ~= requestChooser then return end
+        if not choice then
+            _chooser = nil
+            _requestPending = false
+            _requestGeneration = _requestGeneration + 1
+            return
+        end
+        if choice.state == true then return end
+        _chooser = nil
+        _requestPending = false
+        _requestGeneration = _requestGeneration + 1
         -- Copy selected name to clipboard
         hs.pasteboard.setContents(choice.text)
         HSMakeAlert(programName,
-            string.format("「%s」をクリップボードにコピーしました", choice.text),
+            string.format(L("namegen_copied"), choice.text),
             false, "informational")
     end)
-    _chooser:placeholderText("AI が名前を生成中...")
-    _chooser:choices({{ text = "⏳ 生成中...", subText = "少々お待ちください" }})
-    _chooser:show()
+    _chooser = requestChooser
+    _requestPending = true
+    requestChooser:placeholderText(L("namegen_loading_placeholder"))
+    requestChooser:choices({{ text = L("namegen_loading"), subText = L("namegen_wait"), state = true }})
+    requestChooser:show()
 
     local ctx = gatherContext()
-    local prompt = ctx .. "\n\n"
-    prompt = prompt .. "上記のコンテキストに基づいて、音楽プロジェクト/トラックの名前を10個提案してください。\n"
-    prompt = prompt .. "条件:\n"
-    prompt = prompt .. "- クリエイティブで印象的な名前\n"
-    prompt = prompt .. "- 英語・日本語・造語のミックスOK\n"
-    prompt = prompt .. "- 各名前は短く（1〜4語）\n"
-    prompt = prompt .. "- 各名前の後に括弧でイメージを一言添える\n"
-    prompt = prompt .. "- 1行に1つずつ、番号なしで出力\n"
+    local prompt = ctx .. "\n\n" .. L("namegen_user_prompt")
 
     if userHint and userHint ~= "" then
-        prompt = prompt .. "\nユーザーからのヒント: " .. userHint
+        prompt = prompt .. "\n" .. string.format(L("namegen_user_hint"), userHint)
     end
 
     local messages = {
-        { role = "system", content = "あなたはクリエイティブな音楽プロジェクト名を提案するアシスタントです。" },
+        { role = "system", content = L("namegen_system_prompt") },
         { role = "user",   content = prompt },
     }
 
     openai.chat(messages, function(reply, err)
-        if not _chooser then
-            print("[LES][ai.namegen] reply dropped: chooser already closed")
+        if _chooser ~= requestChooser or _requestGeneration ~= requestGeneration then
+            print("[LES][ai.namegen] reply dropped: request is no longer current")
             return
         end
-        -- Always replace the "生成中" spinner so a nil/empty reply can never
+        _requestPending = false
+        -- Always replace the loading row so a nil/empty reply can never
         -- strand the chooser on the loading state.
         if err or type(reply) ~= "string" or reply == "" then
-            local errMsg = err or "空の応答が返されました"
-            print("[LES][ai.namegen] reply error: " .. tostring(errMsg))
-            _chooser:choices({{ text = "❌ エラー", subText = errMsg }})
-            _chooser:refreshChoicesCallback()
+            local errMsg = err and L("ai_request_failed") or L("ai_empty_response")
+            print("[LES][ai.namegen] reply error: " .. tostring(err or "empty response"))
+            requestChooser:choices({{ text = L("namegen_error"), subText = errMsg, state = true }})
+            requestChooser:refreshChoicesCallback()
             return
         end
 
@@ -130,11 +151,12 @@ function namegen.open(userHint)
         end
 
         if #choices == 0 then
-            choices = {{ text = "名前を生成できませんでした", subText = "もう一度お試しください" }}
+            choices = {{ text = L("namegen_empty_result"), subText = L("namegen_retry"), state = true }}
         end
 
-        _chooser:choices(choices)
-        _chooser:refreshChoicesCallback()
+        requestChooser:placeholderText(L("namegen_choose"))
+        requestChooser:choices(choices)
+        requestChooser:refreshChoicesCallback()
     end)
 end
 

@@ -38,6 +38,7 @@ return {setup=function(...)
   local fnutils = require("hs.fnutils")
   local host = require("hs.host")
   local timer = require("hs.timer")
+  local task = require("hs.task")
 
   -- setup core functions
 
@@ -101,7 +102,14 @@ hs.fileDroppedToDockIconCallback = nil
 --- Returns:
 ---  * None
 hs.relaunch = function()
-    os.execute([[ (while ps -p ]]..hs.processInfo.processID..[[ > /dev/null ; do sleep 1 ; done ; open -a "]]..hs.processInfo.bundlePath..[[" ) & ]])
+    local launcher = task.new("/bin/sh", nil, {
+        "-c",
+        [[while /bin/kill -0 "$1" 2>/dev/null; do /bin/sleep 1; done; exec /usr/bin/open -a "$2"]],
+        "relaunch",
+        tostring(hs.processInfo.processID),
+        hs.processInfo.bundlePath,
+    })
+    if launcher then launcher:start() end
     hs._exit(true, true)
 end
 
@@ -616,11 +624,30 @@ coroutine.applicationYield = hs.coroutineApplicationYield
   end
 
   if not hasinitfile then
-    bundlePath = hs.processInfo["bundlePath"]
-    bundlePath = bundlePath:gsub(" ", "\\ ") -- Escape character for spaces to make shell happy
-    copyExecInstruction = "cp " .. bundlePath .. "/Contents/Resources/extensions/hs/les/jumpstart.lua ~/.les/init.lua"
-    os.execute("zsh -c \"" .. copyExecInstruction .. "\"")
-    hs.reload()
+    local sourcePath = hs.processInfo.bundlePath .. "/Contents/Resources/extensions/hs/les/jumpstart.lua"
+    local separator = configdir:sub(-1) == "/" and "" or "/"
+    local destinationPath = configdir .. separator .. "init.lua"
+    local copyTask = task.new("/bin/cp", nil, {sourcePath, destinationPath})
+    local copyStarted = copyTask and copyTask:start()
+    if copyStarted then
+      while copyTask:isRunning() do timer.usleep(1000) end
+    end
+
+    local modeTask = nil
+    local modeStarted = false
+    if copyStarted and copyTask:terminationStatus() == 0 then
+      modeTask = task.new("/bin/chmod", nil, {"600", destinationPath})
+      modeStarted = modeTask and modeTask:start()
+      if modeStarted then
+        while modeTask:isRunning() do timer.usleep(1000) end
+      end
+    end
+
+    if modeStarted and modeTask:terminationStatus() == 0 then
+      hs.reload()
+    else
+      hs.printf("Unable to install LES startup file at %s", destinationPath)
+    end
     return hs.completionsForInputString, runstring
   end
 

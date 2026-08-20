@@ -8,14 +8,12 @@
 
 require("globals.constants")
 require("util.io")
+local appidentity = require("util.appidentity")
 
 require("hs.plist")
 
 --- Identify if a given hs.application is an instance of Live
 ---
---- Some users have reported false-negative detection of a running
---- instance when using bundle search only, so we're using the name
---- as a fallback.
 ---@param hsAppObj userdata|nil  hs.application object
 ---@return boolean
 function isHsAppObjLive(hsAppObj)
@@ -25,11 +23,8 @@ function isHsAppObjLive(hsAppObj)
   --       granular APIs to make a determination of what that memory region
   --       is supposed to represent
   if hsAppObj == nil or type(hsAppObj) ~= "userdata" then return false end
-  -- We only use exact matching
-  if hsAppObj:bundleID() ~= targetBundle then
-    return hsAppObj:name() == targetName
-  end
-  return true
+  local ok, bundleID = pcall(function() return hsAppObj:bundleID() end)
+  return ok and appidentity.isLiveBundleID(bundleID)
 end
 
 ---@return boolean
@@ -77,9 +72,8 @@ end
 
 -- Search for a running, preferably in-focus, instance of Live
 --
--- Uses similar fallback to isHsAppObjLive() but doesn't rely on
--- it because APIs are slightly different. Like isHsAppObjLive(),
--- we're relying on exact matching.
+-- Uses the bundle identifier rather than the user-visible app name, which can
+-- be shared by an unrelated process.
 --
 --- Results are memoized with a 2-second TTL to avoid expensive
 --- hs.application.find() calls on every keystroke/timer tick.
@@ -103,8 +97,8 @@ function getLiveHsAppObj()
   if hsAppObj == nil or isHsAppObjLive(hsAppObj) == false then
     hsAppObj = hs.application.find(targetBundle)
   end
-  if hsAppObj == nil then
-    hsAppObj = hs.application.find(targetName, true, true)
+  if hsAppObj ~= nil and isHsAppObjLive(hsAppObj) == false then
+    hsAppObj = nil
   end
 
   -- Cache the result
@@ -134,17 +128,15 @@ end
 -- include)
 --
 -- Use this function sparingly
---- Results are memoized with a 60-second TTL to avoid expensive
---- getMenuItems() traversals on every call.
----@type {titles: table|nil, timestamp: number, TTL: number}
-local validTitlesCache = { titles = nil, timestamp = 0, TTL = 60 }
+--- Results are cached for the lifetime of the Live process. The application
+--- watcher invalidates this when Live terminates, avoiding a synchronous full
+--- AX menu traversal every time the user returns after an arbitrary TTL.
+---@type {titles: table|nil}
+local validTitlesCache = { titles = nil }
 
 function getValidTitles()
   -- Return cached result if still valid
-  local now = hs.timer.secondsSinceEpoch()
-  if validTitlesCache.titles and (now - validTitlesCache.timestamp) < validTitlesCache.TTL then
-    return validTitlesCache.titles
-  end
+  if validTitlesCache.titles then return validTitlesCache.titles end
 
   local function fetchInnerTitle(val, otable)
     local title = val["AXTitle"]
@@ -174,7 +166,6 @@ function getValidTitles()
 
   -- Cache the result
   validTitlesCache.titles = titleTable
-  validTitlesCache.timestamp = now
 
   return titleTable
 end
@@ -182,7 +173,6 @@ end
 --- Invalidate the valid titles cache (called alongside Live app cache invalidation).
 function invalidateValidTitlesCache()
   validTitlesCache.titles = nil
-  validTitlesCache.timestamp = 0
 end
 
 function getTipValue(input)

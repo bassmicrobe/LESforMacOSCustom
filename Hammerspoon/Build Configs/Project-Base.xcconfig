@@ -9,6 +9,9 @@
 // Configuration settings file format documentation can be found at:
 // https://help.apple.com/xcode/#/dev745c5c974
 
+// Fork product name shared with application and test-host settings.
+LES_HOST_APP_NAME = Live Enhancement Suite Custom
+
 // Base SDK
 SDKROOT = macosx
 // macOS Deployment Target

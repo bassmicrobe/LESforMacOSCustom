@@ -1,0 +1,9 @@
+*
+!.luacheckrc
+!scripts/
+!scripts/run-lua-tests.sh
+!extensions/
+!extensions/_coresetup/
+!extensions/_coresetup/_coresetup.lua
+!extensions/les/
+!extensions/les/**

@@ -6,18 +6,11 @@
 --  Distributed under the MIT software license, see the accompanying
 --  file COPYING.txt or visit https://opensource.org/license/mit/
 
------------------------------------------------
---  Settings GUI (hs.webview)                --
---  HTML/CSS-based settings panel            --
---  Replaces manual settings.ini text edit   --
------------------------------------------------
-
----@type hs.webview|nil
+-- HTML/CSS settings panel replacing direct settings.ini editing.
 local settingsWebview = nil
----@type hs.webview.usercontent|nil
 local settingsUC = nil
----@type hs.timer|nil
 local pendingReloadTimer = nil
+local windowframe = require("util.windowframe")
 
 local function sLog(msg)
     -- Only log in debug mode (avoids unbounded debug.log growth). Secure the
@@ -40,39 +33,40 @@ end
 -- contain '__'). collectGuiPatchFromData() maps it to the '未設定' default sentinel.
 local CLEAR_OPENAIKEY_MARKER = "__CLEAR_OPENAIKEY__"
 
--- Binary settings definition: {key, display label, short description}
+-- Binary settings definition: keep locale keys so every HTML build reflects
+-- the current _G.uiLanguage value.
 local TOGGLE_DEFS = {
-    { key = "autoadd",               label = "プラグイン自動追加",          desc = "選択後に自動でトラックへ追加する" },
-    { key = "resettobrowserbookmark",label = "ブックマークへリセット",       desc = "追加後にブックマーク位置をクリック（フルスクリーン時のみ）" },
-    { key = "disableloop",           label = "MIDIループ無効化",             desc = "Cmd+Shift+M で作成したクリップのループをオフにする" },
-    { key = "saveasnewver",          label = "バージョン保存 (Cmd+Alt+S)",   desc = "FL Studio 風の _2, _3 ... 付き新規保存" },
-    { key = "altgrmarker",           label = "Alt+L でマーカー追加",         desc = "Shift+L の代わりに Alt+L を使用（大文字入力と競合しない）" },
-    { key = "double0todelete",       label = "0×2 で削除",                   desc = "0 キーを素早く 2 回押して Delete を実行" },
-    { key = "absolutereplace",       label = "絶対置換ショートカット",        desc = "Ctrl+Alt+D（絶対複製）と Ctrl+Alt+V（絶対貼付け）を有効化" },
-    { key = "ctrlabsoluteduplicate", label = "Cmd+Ctrl+D で絶対複製",        desc = "Dock の非表示ショートカットと競合しない代替マッピング" },
-    { key = "enableclosewindow",     label = "Ctrl+W でウィンドウを閉じる",  desc = "Ctrl+W / Ctrl+Shift+W を有効化" },
-    { key = "vstshortcuts",          label = "VST ショートカット",            desc = "FabFilter Pro-Q 3 など VST 専用の Undo/Redo" },
-    { key = "dynamicreload",         label = "動的リロード",                  desc = "メニューを開くたびに menuconfig.ini を再読み込み（重い場合は無効化）" },
-    { key = "texticon",              label = "テキストアイコン",               desc = "メニューバーのアイコンを \"LES\" テキストで表示" },
-    { key = "addtostartup",          label = "ログイン時に自動起動",           desc = "macOS ログイン時に LES を起動" },
-    { key = "launchwithlive",         label = "Live 起動時に自動起動",          desc = "Ableton Live の起動を検知して LES を自動起動（Launch Agent）" },
-    { key = "notifyexport",          label = "エクスポート完了通知",            desc = "レンダリング完了時に macOS 通知センターへ通知" },
-    { key = "notifyhourly",          label = "1時間ごとの作業時間通知",         desc = "プロジェクトのセッション時間が 1 時間経過するたびに通知" },
-    { key = "enabledebug",           label = "デバッグモード",                 desc = "コンソール・再起動・Hammerspoon フォルダなどのオプションを表示" },
-    { key = "checksanity",           label = "バージョン検証",                 desc = "macOS と Ableton Live のサポートバージョンを起動時に確認" },
+    { key = "autoadd", labelKey = "settings_toggle_autoadd_label", descKey = "settings_toggle_autoadd_desc" },
+    { key = "resettobrowserbookmark", labelKey = "settings_toggle_resettobrowserbookmark_label", descKey = "settings_toggle_resettobrowserbookmark_desc" },
+    { key = "disableloop", labelKey = "settings_toggle_disableloop_label", descKey = "settings_toggle_disableloop_desc" },
+    { key = "saveasnewver", labelKey = "settings_toggle_saveasnewver_label", descKey = "settings_toggle_saveasnewver_desc" },
+    { key = "altgrmarker", labelKey = "settings_toggle_altgrmarker_label", descKey = "settings_toggle_altgrmarker_desc" },
+    { key = "double0todelete", labelKey = "settings_toggle_double0todelete_label", descKey = "settings_toggle_double0todelete_desc" },
+    { key = "absolutereplace", labelKey = "settings_toggle_absolutereplace_label", descKey = "settings_toggle_absolutereplace_desc" },
+    { key = "ctrlabsoluteduplicate", labelKey = "settings_toggle_ctrlabsoluteduplicate_label", descKey = "settings_toggle_ctrlabsoluteduplicate_desc" },
+    { key = "enableclosewindow", labelKey = "settings_toggle_enableclosewindow_label", descKey = "settings_toggle_enableclosewindow_desc" },
+    { key = "vstshortcuts", labelKey = "settings_toggle_vstshortcuts_label", descKey = "settings_toggle_vstshortcuts_desc" },
+    { key = "dynamicreload", labelKey = "settings_toggle_dynamicreload_label", descKey = "settings_toggle_dynamicreload_desc" },
+    { key = "texticon", labelKey = "settings_toggle_texticon_label", descKey = "settings_toggle_texticon_desc" },
+    { key = "addtostartup", labelKey = "settings_toggle_addtostartup_label", descKey = "settings_toggle_addtostartup_desc" },
+    { key = "launchwithlive", labelKey = "settings_toggle_launchwithlive_label", descKey = "settings_toggle_launchwithlive_desc" },
+    { key = "notifyexport", labelKey = "settings_toggle_notifyexport_label", descKey = "settings_toggle_notifyexport_desc" },
+    { key = "notifyhourly", labelKey = "settings_toggle_notifyhourly_label", descKey = "settings_toggle_notifyhourly_desc" },
+    { key = "enabledebug", labelKey = "settings_toggle_enabledebug_label", descKey = "settings_toggle_enabledebug_desc" },
+    { key = "checksanity", labelKey = "settings_toggle_checksanity_label", descKey = "settings_toggle_checksanity_desc" },
 }
 
--- AI text settings: {key, label, desc, placeholder}
+-- AI text settings: {key, labelKey, descKey, placeholderKey}
 local AI_DEFS = {
-    { key = "openaikey",   label = "OpenAI API キー",     desc = "AI 機能で使用する API キー（platform.openai.com/api-keys で取得）", placeholder = "sk-..." },
-    { key = "openaimodel", label = "AI モデル",           desc = "使用するモデル名（例: gpt-4o-mini, gpt-4o, gpt-4.1-mini）",         placeholder = "gpt-4o-mini" },
+    { key = "openaikey", labelKey = "settings_ai_key_label", descKey = "settings_ai_key_desc", placeholderKey = "settings_ai_key_placeholder" },
+    { key = "openaimodel", labelKey = "settings_ai_model_label", descKey = "settings_ai_model_desc", placeholderKey = "settings_ai_model_placeholder" },
 }
 
--- Numeric settings definition: {key, label, desc, step, min, max}
+-- Numeric settings definition: {key, labelKey, descKey, step, min, max}
 local NUMERIC_DEFS = {
-    { key = "loadspeed",  label = "ロード待機時間（秒）",    desc = "プラグイン検索後に追加するまでの待機秒数（HDDが遅い場合は増やす）",   step = "0.1", min = "0.1", max = "10.0" },
-    { key = "bookmarkx",  label = "ブックマーク X 座標（px）", desc = "resettobrowserbookmark のクリック先 X 座標",                          step = "1",   min = "0",   max = "9999" },
-    { key = "bookmarky",  label = "ブックマーク Y 座標（px）", desc = "resettobrowserbookmark のクリック先 Y 座標",                          step = "1",   min = "0",   max = "9999" },
+    { key = "loadspeed", labelKey = "settings_numeric_loadspeed_label", descKey = "settings_numeric_loadspeed_desc", step = "0.1", min = "0.1", max = "10.0" },
+    { key = "bookmarkx", labelKey = "settings_numeric_bookmarkx_label", descKey = "settings_numeric_bookmarkx_desc", step = "1", min = "0", max = "9999" },
+    { key = "bookmarky", labelKey = "settings_numeric_bookmarky_label", descKey = "settings_numeric_bookmarky_desc", step = "1", min = "0", max = "9999" },
 }
 
 -- Read the raw (pre-parse) pianorollmacro character from settings.ini
@@ -102,10 +96,17 @@ local function escapeHtmlAttr(str)
     return (tostring(str or ""):gsub("&", "&amp;"):gsub('"', "&quot;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
 end
 
--- Build the complete HTML document for the settings panel.
--- Uses pre-compiled Tailwind-equivalent utilities (offline, no CDN).
+local function jsLiteral(value)
+    local text = tostring(value or "")
+    local ok, encoded = pcall(hs.json.encode, text)
+    if ok and type(encoded) == "string" then return encoded end
+    text = text:gsub("\\", "\\\\"):gsub("'", "\\'")
+        :gsub("\n", "\\n"):gsub("\r", "\\r"):gsub("<", "\\x3c"):gsub(">", "\\x3e")
+    return "'" .. text .. "'"
+end
+
+-- Build the complete offline HTML document for the settings panel.
 local function buildSettingsHTML()
-    -- ── Load bundled CSS from assets ────────────────────────────────────
     local cssPath = BundleResourcePath .. "/assets/settings-tw.css"
     local css = ""
     local f = io.open(cssPath, "r")
@@ -114,7 +115,6 @@ local function buildSettingsHTML()
         f:close()
     end
 
-    -- ── Toggle rows ─────────────────────────────────────────────────────
     local toggleRows = {}
     for _, s in ipairs(TOGGLE_DEFS) do
         local val = 0
@@ -123,20 +123,21 @@ local function buildSettingsHTML()
         end
         local checked = (tonumber(val) == 1) and " checked" or ""
         table.insert(toggleRows, table.concat({
-            '<div class="flex items-center justify-between py-2.5 border-b border-surface-border gap-4 last:border-b-0">',
+            '<div class="settings-row flex items-center justify-between py-2.5 border-b border-surface-border gap-4 last:border-b-0">',
             '  <div class="flex-1 min-w-0">',
-            '    <span class="block font-medium text-label">', s.label, '</span>',
-            '    <span class="block text-[11px] text-label-dim mt-px">', s.desc, '</span>',
+            '    <label id="label-', s.key, '" for="setting-', s.key, '" class="block font-medium text-label">', escapeHtmlAttr(L(s.labelKey)), '</label>',
+            '    <span id="desc-', s.key, '" class="block text-[11px] text-label-dim mt-px">', escapeHtmlAttr(L(s.descKey)), '</span>',
             '  </div>',
             '  <label class="relative inline-block w-[42px] h-6 shrink-0">',
-            '    <input type="checkbox" data-key="', s.key, '"', checked, ' onchange="markDirty()" style="position:absolute;inset:0;opacity:0;cursor:pointer;margin:0;width:100%;height:100%;">',
+            '    <input id="setting-', s.key, '" type="checkbox" data-key="', s.key, '"', checked,
+            ' aria-labelledby="label-', s.key, '" aria-describedby="desc-', s.key,
+            '" onchange="markDirty()" style="position:absolute;inset:0;opacity:0;cursor:pointer;margin:0;width:100%;height:100%;">',
             '    <span class="toggle-knob absolute inset-0 bg-surface-hover rounded-full pointer-events-none transition-colors duration-200"></span>',
             '  </label>',
             '</div>',
-        }, "\n"))
+        }, ""))
     end
 
-    -- ── Numeric rows ────────────────────────────────────────────────────
     local numericRows = {}
     for _, s in ipairs(NUMERIC_DEFS) do
         local val = 0
@@ -144,36 +145,34 @@ local function buildSettingsHTML()
             val = settingsManager[s.key]["value"] or 0
         end
         table.insert(numericRows, table.concat({
-            '<div class="flex items-center justify-between py-2.5 border-b border-surface-border gap-4 last:border-b-0">',
+            '<div class="settings-row flex items-center justify-between py-2.5 border-b border-surface-border gap-4 last:border-b-0">',
             '  <div class="flex-1 min-w-0">',
-            '    <span class="block font-medium text-label">', s.label, '</span>',
-            '    <span class="block text-[11px] text-label-dim mt-px">', s.desc, '</span>',
+            '    <label id="label-', s.key, '" for="setting-', s.key, '" class="block font-medium text-label">', escapeHtmlAttr(L(s.labelKey)), '</label>',
+            '    <span id="desc-', s.key, '" class="block text-[11px] text-label-dim mt-px">', escapeHtmlAttr(L(s.descKey)), '</span>',
             '  </div>',
-            '  <input type="number"',
+            '  <input id="setting-', s.key, '" type="number" aria-describedby="desc-', s.key, '"',
             '    class="w-[88px] shrink-0 bg-input-bg border border-input-border rounded-lg text-[#e5e5ea] px-2.5 py-1.5 text-[13px] text-right appearance-textfield outline-none focus:border-accent"',
             '    data-key="', s.key, '" value="', tostring(val), '"',
             '    step="', s.step, '" min="', s.min, '" max="', s.max, '"',
             '    oninput="markDirty()">',
             '</div>',
-        }, "\n"))
+        }, ""))
     end
 
-    -- ── Piano roll macro row ────────────────────────────────────────────
     local macroRaw = getRawPianorollMacro()
     local macroRow = table.concat({
-        '<div class="flex items-center justify-between py-2.5 border-b border-surface-border gap-4 last:border-b-0">',
+        '<div class="settings-row flex items-center justify-between py-2.5 border-b border-surface-border gap-4 last:border-b-0">',
         '  <div class="flex-1 min-w-0">',
-        '    <span class="block font-medium text-label">ピアノロールマクロキー</span>',
-        '    <span class="block text-[11px] text-label-dim mt-px">ピアノロールマクロのトリガーキー（例: ` や 1 など 1 文字）</span>',
+        '    <label for="setting-pianorollmacro" class="block font-medium text-label">', escapeHtmlAttr(L("settings_macro_label")), '</label>',
+        '    <span id="desc-pianorollmacro" class="block text-[11px] text-label-dim mt-px">', escapeHtmlAttr(L("settings_macro_desc")), '</span>',
         '  </div>',
-        '  <input type="text" maxlength="1"',
+        '  <input id="setting-pianorollmacro" type="text" maxlength="1" aria-describedby="desc-pianorollmacro"',
         '    class="w-[88px] shrink-0 bg-input-bg border border-input-border rounded-lg text-[#e5e5ea] px-2.5 py-1.5 text-[13px] text-left outline-none focus:border-accent"',
         '    data-key="pianorollmacro" value="', escapeHtmlAttr(macroRaw), '"',
         '    oninput="markDirty()">',
         '</div>',
-    }, "\n")
+    }, "")
 
-    -- ── AI settings rows ──────────────────────────────────────────────────
     local aiRows = {}
     for _, s in ipairs(AI_DEFS) do
         local val = ""
@@ -187,42 +186,47 @@ local function buildSettingsHTML()
         local inputClass =
             "w-[200px] shrink-0 bg-input-bg border border-input-border rounded-lg text-[#e5e5ea] px-2.5 py-1.5 text-[13px] outline-none focus:border-accent"
         local renderVal = val
-        local placeholder = s.placeholder
+        local placeholder = L(s.placeholderKey)
         if s.key == "openaikey" then
             -- SECURITY: never emit the real API key into the DOM. Blank field == "keep existing".
             renderVal = ""
             local hasKey = (val ~= nil and val ~= "" and tostring(val) ~= "未設定")
-            placeholder = hasKey and "保存済み（変更する場合のみ入力）" or "sk-..."
+            placeholder = hasKey and L("settings_ai_key_saved_placeholder") or L("settings_ai_key_placeholder")
         end
         -- For the API key, offer a '削除' affordance: a blank field means
         -- "keep existing", so removing the key needs an explicit clear marker.
         local clearBtn = ""
+        local inputType = "text"
+        local inputHandler = "markDirty()"
         if s.key == "openaikey" then
+            inputType = "password"
+            inputHandler = "apiKeyChanged(this)"
             clearBtn = table.concat({
                 '    <button type="button"',
                 '      class="shrink-0 bg-transparent text-accent-red border border-input-border rounded-lg px-2 py-1.5 text-[12px] cursor-pointer hover:border-accent-red"',
-                '      onclick="clearApiKey(this)">削除</button>',
+                '      aria-describedby="desc-openaikey" onclick="clearApiKey(this)">', escapeHtmlAttr(L("settings_ai_key_clear")), '</button>',
             }, "\n")
         end
         table.insert(aiRows, table.concat({
-            '<div class="flex items-center justify-between py-2.5 border-b border-surface-border gap-4 last:border-b-0">',
+            '<div class="settings-row flex items-center justify-between py-2.5 border-b border-surface-border gap-4 last:border-b-0">',
             '  <div class="flex-1 min-w-0">',
-            '    <span class="block font-medium text-label">', s.label, '</span>',
-            '    <span class="block text-[11px] text-label-dim mt-px">', s.desc, '</span>',
+            '    <label id="label-', s.key, '" for="setting-', s.key, '" class="block font-medium text-label">', escapeHtmlAttr(L(s.labelKey)), '</label>',
+            '    <span id="desc-', s.key, '" class="block text-[11px] text-label-dim mt-px">', escapeHtmlAttr(L(s.descKey)), '</span>',
             '  </div>',
-            '  <div class="flex items-center gap-2 shrink-0">',
-            '  <input type="text" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"',
+            '  <div class="settings-control flex items-center gap-2 shrink-0">',
+            '  <input id="setting-', s.key, '" type="', inputType,
+            '" aria-describedby="desc-', s.key,
+            '" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"',
             '    class="', inputClass, '"',
             '    data-key="', s.key, '" value="', escapeHtmlAttr(renderVal), '"',
             '    placeholder="', escapeHtmlAttr(placeholder), '"',
-            '    oninput="markDirty()">',
+            '    oninput="', inputHandler, '">',
             clearBtn,
             '  </div>',
             '</div>',
-        }, "\n"))
+        }, ""))
     end
 
-    -- ── JavaScript ──────────────────────────────────────────────────────
     -- JSON-encode the clear marker so it is a safe, properly-quoted JS string literal.
     local CLEAR_MARKER_JS = "'__CLEAR_OPENAIKEY__'"
     local okEnc, encMarker = pcall(hs.json.encode, CLEAR_OPENAIKEY_MARKER)
@@ -231,16 +235,26 @@ local function buildSettingsHTML()
     end
     local js = table.concat({
         "var dirty = false;",
+        "var saving = false;",
         "function markDirty() {",
         "  setDirty(true);",
         "}",
-        "// '削除' affordance for the API key: a blank field means 'keep existing',",
+        "// API-key clear affordance: a blank field means 'keep existing',",
         "// so clearing the key needs an explicit marker Lua maps to the default sentinel.",
         "function clearApiKey(btn) {",
         "  var el = document.querySelector('[data-key=\"openaikey\"]');",
         "  if (!el) return;",
-        "  el.value = " .. CLEAR_MARKER_JS .. ";",
-        "  el.placeholder = '削除されます';",
+        "  el.value = '';",
+        "  el.dataset.clearRequested = 'true';",
+        "  el.placeholder = " .. jsLiteral(L("settings_ai_key_clear_on_save")) .. ";",
+        "  btn.textContent = " .. jsLiteral(L("settings_ai_key_clear_pending")) .. ";",
+        "  btn.disabled = true;",
+        "  markDirty();",
+        "}",
+        "function apiKeyChanged(el) {",
+        "  delete el.dataset.clearRequested;",
+        "  var btn = el.parentElement.querySelector('button');",
+        "  if (btn) { btn.disabled = false; btn.textContent = " .. jsLiteral(L("settings_ai_key_clear")) .. "; }",
         "  markDirty();",
         "}",
         "function showToast(text, ok) {",
@@ -263,7 +277,8 @@ local function buildSettingsHTML()
         "  dirty = d;",
         "  var btn = document.getElementById('saveBtn');",
         "  if (!btn) return;",
-        "  if (d) {",
+        "  btn.disabled = !d || saving;",
+        "  if (d && !saving) {",
         "    btn.classList.remove('opacity-40', 'pointer-events-none');",
         "    btn.classList.add('opacity-100', 'cursor-pointer');",
         "  } else {",
@@ -275,16 +290,20 @@ local function buildSettingsHTML()
         "function saveResult(ok, message) {",
         "  // Bump the save token so a real Lua reply cancels any pending watchdog timer.",
         "  window._saveTok = (window._saveTok||0)+1;",
+        "  saving = false;",
         "  if (ok) {",
-        "    showToast(message || '保存しました', true);",
+        "    showToast(message || " .. jsLiteral(L("settings_save_success")) .. ", true);",
         "    setDirty(false);",
         "  } else {",
-        "    showToast(message || '保存に失敗しました', false);",
+        "    showToast(message || " .. jsLiteral(L("settings_save_failed")) .. ", false);",
         "    setDirty(true);",
         "    setTimeout(hideToast, 3000);",
         "  }",
         "}",
         "function saveSettings() {",
+        "  if (!dirty || saving) return;",
+        "  var invalid = Array.prototype.find.call(document.querySelectorAll('input'), function(el) { return !el.checkValidity(); });",
+        "  if (invalid) { invalid.focus(); showToast(" .. jsLiteral(L("settings_validation_failed")) .. ", false); return; }",
         "  var settings = {};",
         "  document.querySelectorAll('[data-key]').forEach(function(el) {",
         "    var k = (el.getAttribute('data-key') || '').trim();",
@@ -292,60 +311,74 @@ local function buildSettingsHTML()
         "    if (el.type === 'checkbox') {",
         "      settings[k] = el.checked ? '1' : '0';",
         "    } else {",
-        "      settings[k] = el.value;",
+        "      settings[k] = (k === 'openaikey' && el.dataset.clearRequested === 'true') ? " .. CLEAR_MARKER_JS .. " : el.value;",
         "    }",
         "  });",
         "  // Always stringify: WKWebView → Lua is most reliable as JSON text (nested dicts can break pairs()/keys).",
         "  window.webkit.messageHandlers.lesmessages.postMessage(JSON.stringify({ action: 'save', data: settings }));",
+        "  saving = true;",
         "  // Neutral 'saving' state; the Lua callback reports success/failure via saveResult().",
         "  var btn = document.getElementById('saveBtn');",
         "  if (btn) { btn.classList.add('opacity-40', 'pointer-events-none'); btn.classList.remove('opacity-100', 'cursor-pointer'); }",
-        "  showToast('保存中...', true);",
+        "  showToast(" .. jsLiteral(L("settings_saving")) .. ", true);",
         "  // Watchdog: a dropped/garbled WK bridge message must not hang the UI forever.",
         "  // A real Lua reply bumps window._saveTok via saveResult(), which cancels this.",
         "  window._saveTok = (window._saveTok||0)+1; var t = window._saveTok;",
-        "  setTimeout(function(){ if (window._saveTok === t) saveResult(false, '保存に失敗しました（応答なし）'); }, 5000);",
+        "  setTimeout(function(){ if (window._saveTok === t) saveResult(false, " .. jsLiteral(L("settings_no_response")) .. "); }, 5000);",
         "}",
+        "window.addEventListener('beforeunload', function(e) { if (dirty && !saving) { e.preventDefault(); e.returnValue = ''; } });",
     }, "\n")
 
-    -- ── Assemble full document ──────────────────────────────────────────
     return table.concat({
-        "<!DOCTYPE html><html><head>",
+        "<!DOCTYPE html><html lang='" .. escapeHtmlAttr(L("locale_code")) .. "'><head>",
         "<meta charset='UTF-8'>",
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>",
         "<style>", css,
         "\n.bg-accent-red { background-color: #ff453a; }",
         "\n.text-accent-red { color: #ff453a; }",
-        "\n.hover\\:border-accent-red:hover { border-color: #ff453a; }\n</style>",
+        "\n.hover\\:border-accent-red:hover { border-color: #ff453a; }",
+        "\nhtml { color-scheme: dark; }",
+        "\nbutton:focus-visible, input:focus-visible { outline: 2px solid #64b5ff; outline-offset: 2px; }",
+        "\ninput[type='checkbox']:focus-visible + .toggle-knob { outline: 2px solid #64b5ff; outline-offset: 3px; }",
+        "\n@media (max-width: 460px) { .settings-row { align-items: stretch; flex-direction: column; gap: .5rem; } .settings-control { width: 100%; } .settings-control input { flex: 1; min-width: 0; } }\n</style>",
         "</head>",
         "<body class='bg-surface text-[#e5e5ea] text-[13px] leading-snug font-[-apple-system,BlinkMacSystemFont,sans-serif]'>",
 
         "<div class='sticky top-0 z-50 bg-surface-header border-b border-surface-border flex items-center justify-between px-5 py-3.5'>",
         "  <div>",
-        "    <h1 class='text-[15px] font-semibold text-white'>LES 設定</h1>",
+        "    <h1 class='text-[15px] font-semibold text-white'>", escapeHtmlAttr(L("settings_title")), "</h1>",
         "    <p class='text-[11px] text-label-muted mt-0.5'>Live Enhancement Suite Custom</p>",
         "  </div>",
-        "  <button id='saveBtn' onclick='saveSettings()'",
+        "  <button type='button' id='saveBtn' disabled onclick='saveSettings()'",
         "    class='bg-accent text-white border-none rounded-lg px-4 py-1.5 text-[13px] font-medium transition-all duration-150 opacity-40 pointer-events-none hover:bg-accent-hover'>",
-        "    保存して再起動",
+        "    ", escapeHtmlAttr(L("settings_save_apply")),
         "  </button>",
         "</div>",
 
         "<div class='px-5 pt-2 pb-16'>",
-        "  <div class='text-[11px] font-semibold text-label-muted tracking-wider uppercase pt-4 pb-1.5 border-b border-surface-border mb-0.5'>機能トグル</div>",
+        "  <section aria-labelledby='settings-section-toggles'>",
+        "  <h2 id='settings-section-toggles' class='text-[11px] font-semibold text-label-muted tracking-wider uppercase pt-4 pb-1.5 border-b border-surface-border mb-0.5'>", escapeHtmlAttr(L("settings_section_toggles")), "</h2>",
         table.concat(toggleRows, "\n"),
+        "  </section>",
 
-        "  <div class='text-[11px] font-semibold text-label-muted tracking-wider uppercase pt-4 pb-1.5 border-b border-surface-border mb-0.5'>パフォーマンス・タイミング</div>",
+        "  <section aria-labelledby='settings-section-timing'>",
+        "  <h2 id='settings-section-timing' class='text-[11px] font-semibold text-label-muted tracking-wider uppercase pt-4 pb-1.5 border-b border-surface-border mb-0.5'>", escapeHtmlAttr(L("settings_section_timing")), "</h2>",
         table.concat(numericRows, "\n"),
+        "  </section>",
 
-        "  <div class='text-[11px] font-semibold text-label-muted tracking-wider uppercase pt-4 pb-1.5 border-b border-surface-border mb-0.5'>入力マッピング</div>",
+        "  <section aria-labelledby='settings-section-mapping'>",
+        "  <h2 id='settings-section-mapping' class='text-[11px] font-semibold text-label-muted tracking-wider uppercase pt-4 pb-1.5 border-b border-surface-border mb-0.5'>", escapeHtmlAttr(L("settings_section_mapping")), "</h2>",
         macroRow,
+        "  </section>",
 
-        "  <div class='text-[11px] font-semibold text-label-muted tracking-wider uppercase pt-4 pb-1.5 border-b border-surface-border mb-0.5'>AI 設定</div>",
+        "  <section aria-labelledby='settings-section-ai'>",
+        "  <h2 id='settings-section-ai' class='text-[11px] font-semibold text-label-muted tracking-wider uppercase pt-4 pb-1.5 border-b border-surface-border mb-0.5'>", escapeHtmlAttr(L("settings_section_ai")), "</h2>",
         table.concat(aiRows, "\n"),
+        "  </section>",
         "</div>",
 
         "<div class='fixed bottom-5 left-0 right-0 text-center pointer-events-none'>",
-        "  <span id='toast' class='inline-block bg-accent-green text-black px-5 py-1.5 rounded-full font-semibold text-[13px] opacity-0 transition-opacity duration-300'>保存しました</span>",
+        "  <span id='toast' role='status' aria-live='polite' class='inline-block bg-accent-green text-black px-5 py-1.5 rounded-full font-semibold text-[13px] opacity-0 transition-opacity duration-300'>", escapeHtmlAttr(L("settings_save_success")), "</span>",
         "</div>",
 
         "<script>", js, "</script>",
@@ -353,9 +386,7 @@ local function buildSettingsHTML()
     }, "\n")
 end
 
---- WKWebView may deliver msg.body as a JSON string or a bridged NSDictionary (Lua table).
----@param body any
----@return table|nil
+--- WKWebView may deliver msg.body as a JSON string or bridged NSDictionary.
 local function decodeWebviewMessageBody(body)
     if type(body) == "table" then
         return body
@@ -472,10 +503,7 @@ local function collectGuiPatchFromData(data)
     return patch
 end
 
---- Report a save outcome back to the webview's JS saveResult() handler.
----@param ok boolean whether the write succeeded
----@param message string|nil toast text to display
----@return nil
+--- Report a save outcome to the webview's JS saveResult() handler.
 local function reportSaveResult(ok, message)
     if settingsWebview == nil then
         return
@@ -495,6 +523,80 @@ local function reportSaveResult(ok, message)
     end)
 end
 
+--- Report an intermediate persistence milestone without changing dirty/saving
+--- state. `showToast` writes into the existing aria-live status region.
+---@param message string
+local function reportSaveProgress(message)
+    if settingsWebview == nil then return end
+    local encoded = "''"
+    local okEncode, value = pcall(hs.json.encode, tostring(message))
+    if okEncode and type(value) == "string" then encoded = value end
+    local jsCode = "if (typeof showToast === 'function') { showToast(" .. encoded .. ", true); }"
+    pcall(function()
+        settingsWebview:evaluateJavaScript(jsCode)
+    end)
+end
+
+--- Best-effort recovery after reloadLES() fails. Each step is evaluated
+--- independently so a partial recovery can never be mistaken for success.
+---@return boolean ok
+---@return string|nil failedStep
+---@return any errorValue
+local function recoverSettingsState()
+    if type(settingsManager) ~= "table" then
+        return false, "settingsManager", "unavailable"
+    end
+    for _, methodName in ipairs({"init", "parse", "map"}) do
+        local method = settingsManager[methodName]
+        if type(method) ~= "function" then
+            return false, methodName, "method unavailable"
+        end
+        local ok, result = pcall(method, settingsManager)
+        if not ok then
+            return false, methodName, result
+        end
+        if result == false then
+            return false, methodName, "returned false"
+        end
+    end
+    return true, nil, nil
+end
+
+--- Report that persistence succeeded but the running application was not fully
+--- updated. The panel intentionally remains open so the saved draft and retry
+--- affordance stay visible.
+---@param reloadError any
+local function reportRuntimeApplyFailure(reloadError)
+    print("[settingsgui] reloadLES() failed after settings file save: " .. tostring(reloadError))
+    local recovered, failedStep, recoveryError = recoverSettingsState()
+    local liveMessage = L("settings_live_apply_failed")
+    local alertMessage = L("settings_alert_apply_failed_intro") .. "\n"
+
+    if recovered then
+        alertMessage = alertMessage
+            .. L("settings_alert_recovery_succeeded") .. "\n"
+    else
+        liveMessage = liveMessage .. L("settings_live_recovery_failed_suffix")
+        alertMessage = alertMessage
+            .. string.format(L("settings_alert_recovery_failed"), tostring(failedStep or L("settings_unknown")))
+            .. "\n"
+        print(
+            "[settingsgui] recovery failed at "
+                .. tostring(failedStep)
+                .. ": "
+                .. tostring(recoveryError)
+        )
+    end
+
+    reportSaveResult(false, liveMessage)
+    HSMakeAlert(
+        programName,
+        alertMessage .. L("settings_alert_retry_instruction"),
+        true,
+        "critical"
+    )
+end
+
 
 --- Open the settings GUI webview panel.
 --- Saves via settingsManager:writeFromGui() then calls reloadLES().
@@ -504,10 +606,27 @@ function openSettingsGUI()
         pcall(function() pendingReloadTimer:stop() end)
         pendingReloadTimer = nil
     end
-    -- Destroy any previous instance
+    -- Preserve unsaved form values when the settings command is invoked again.
+    -- If the native object is stale, fall through and recreate it safely.
     if settingsWebview ~= nil then
-        settingsWebview:delete()
-        settingsWebview = nil
+        local existingWebview = settingsWebview
+        local shown, showError = pcall(function()
+            existingWebview:show()
+            existingWebview:bringToFront()
+        end)
+        if shown then
+            pcall(function()
+                local window = existingWebview:hswindow()
+                if window then window:focus() end
+            end)
+            return
+        end
+        print("[settingsgui] existing webview could not be shown; recreating: " .. tostring(showError))
+        pcall(function() existingWebview:delete() end)
+        if settingsWebview == existingWebview then
+            settingsWebview = nil
+            settingsUC = nil
+        end
     end
     if settingsUC ~= nil then
         settingsUC = nil
@@ -552,10 +671,10 @@ function openSettingsGUI()
                     .. tostring(type(data))
                     .. ")"
             )
-            reportSaveResult(false, "保存できませんでした（フォームの値を認識できません）")
+            reportSaveResult(false, L("settings_form_unrecognized"))
             HSMakeAlert(
                 programName,
-                "設定を保存できませんでした（フォームの値を認識できません）。\nコンソールの [settingsgui] ログを確認してください。",
+                L("settings_form_unrecognized_alert"),
                 true,
                 "warning"
             )
@@ -587,40 +706,37 @@ function openSettingsGUI()
             sLog("writeFromGui result=" .. tostring(okWrite))
             if not okWrite then
                 -- Report failure to the GUI: red toast, keep dirty=true and the button enabled.
-                reportSaveResult(false, "保存に失敗しました（設定ファイルへ書き込めません）")
+                reportSaveResult(false, L("settings_write_failed"))
                 HSMakeAlert(
                     programName,
-                    "設定ファイルへ書き込めませんでした（権限またはディスク容量を確認してください）。\n"
-                        .. "~/.les/settings.ini",
+                    L("settings_write_failed_alert"),
                     true,
                     "critical"
                 )
                 return
             end
-            -- Success: green toast (superseded by the imminent reload).
-            reportSaveResult(true, string.format("保存しました（%d 項目）", patchCount))
+            reportSaveProgress(L("settings_live_saved_applying"))
             -- Apply settings IMMEDIATELY. reloadLES() runs in-VM (it rebuilds config
             -- in-process and does NOT call hs.reload()), so the apply must not depend
             -- on whether the panel is reopened within the cosmetic teardown window.
-            local okReload, errReload = pcall(reloadLES)
-            sLog("reloadLES result=" .. tostring(okReload) .. " err=" .. tostring(errReload))
+            local okReload, reloadResult = pcall(reloadLES)
+            sLog("reloadLES result=" .. tostring(okReload) .. " value=" .. tostring(reloadResult))
             -- Verify values made it to memory after reload
             if settingsManager then
                 local spot = settingsManager["autoadd"] and settingsManager["autoadd"]["value"]
                 sLog("post-reload autoadd in memory=" .. tostring(spot))
             end
-            if not okReload then
-                print("[settingsgui] reloadLES() error: " .. tostring(errReload))
-                pcall(function()
-                    settingsManager:init()
-                    settingsManager:parse()
-                    settingsManager:map()
-                end)
+            if not okReload or reloadResult == false then
+                local reloadError = okReload and "reloadLES returned false" or reloadResult
+                reportRuntimeApplyFailure(reloadError)
+                return
             end
+            -- Full success requires both disk persistence and runtime application.
+            reportSaveResult(true, string.format(L("settings_save_applied_count"), patchCount))
             pcall(function()
                 if hs.notify then
                     hs.notify
-                        .new({ title = programName or "LES", informativeText = "設定を保存しました。まもなく再起動します。" })
+                        .new({ title = programName or "LES", informativeText = L("settings_save_notification") })
                         :send()
                 end
             end)
@@ -638,15 +754,15 @@ function openSettingsGUI()
                 end
                 if settingsWebview == wv then
                     settingsWebview = nil
+                    settingsUC = nil
                 end
             end)
         else
             -- Empty patch: report failure to the GUI, keep dirty=true and the button enabled.
-            reportSaveResult(false, "保存できませんでした（有効な設定キーがありません）")
+            reportSaveResult(false, L("settings_no_valid_keys"))
             HSMakeAlert(
                 programName,
-                "設定を保存できませんでした（有効な設定キーがありません）。\n"
-                    .. "アプリを最新ビルドに更新するか、~/.les/settings.ini を直接編集してください。",
+                L("settings_no_valid_keys_alert"),
                 true,
                 "warning"
             )
@@ -655,17 +771,28 @@ function openSettingsGUI()
 
     -- Center on main screen
     local screen = hs.screen.mainScreen():frame()
-    local w, h   = 520, 640
-    local x = screen.x + math.floor((screen.w - w) / 2)
-    local y = screen.y + math.floor((screen.h - h) / 2)
+    local frame = windowframe.center(screen, 520, 640, 12)
 
     settingsWebview = hs.webview.new(
-        {x = x, y = y, w = w, h = h},
+        frame,
         {developerExtrasEnabled = false},
         settingsUC
     )
+    if settingsWebview == nil then
+        settingsUC = nil
+        HSMakeAlert(programName, L("settings_open_failed"), true, "warning")
+        return
+    end
+    local currentWebview = settingsWebview
+    settingsWebview:deleteOnClose(true)
+    settingsWebview:windowCallback(function(action)
+        if action == "closing" and settingsWebview == currentWebview then
+            settingsWebview = nil
+            settingsUC = nil
+        end
+    end)
     settingsWebview:windowStyle({"titled", "closable", "resizable"})
-    settingsWebview:windowTitle("LES 設定")
+    settingsWebview:windowTitle(L("settings_title"))
     settingsWebview:allowTextEntry(true)
     settingsWebview:html(buildSettingsHTML())
     settingsWebview:show()

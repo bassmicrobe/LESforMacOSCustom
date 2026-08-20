@@ -3,6 +3,8 @@
 
 local openai = require("ai.openai")
 local pluginStats = require("tracking.pluginstats")
+local windowframe = require("util.windowframe")
+local utf8text = require("util.utf8text")
 
 local recommend = {}
 
@@ -10,6 +12,9 @@ local recommend = {}
 local _webview = nil
 ---@type hs.webview.usercontent|nil
 local _uc = nil
+local _requestGeneration = 0
+local _requestPending = false
+local MAX_EXTRA_LENGTH = 4000
 
 --- Escape for safe JS string embedding.
 ---@param s string
@@ -23,6 +28,16 @@ local function jsEscape(s)
             :gsub(">", "\\x3e")
             :gsub("\u{2028}", "\\u2028")
             :gsub("\u{2029}", "\\u2029")
+end
+
+local function htmlEscape(s)
+    return tostring(s or ""):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
+end
+
+local function replaceTokens(template, values)
+    return (template:gsub("__([A-Z0-9_]+)__", function(key)
+        return values[key] or ""
+    end))
 end
 
 --- Build usage summary text for the AI prompt.
@@ -44,22 +59,23 @@ local function buildUsageSummary()
     for i = 1, limit do
         local e = entries[i]
         local fav = e.fav and " ★" or ""
-        lines[#lines + 1] = string.format("- %s (使用回数: %d%s)", e.name, e.count, fav)
+        lines[#lines + 1] = "- " .. e.name .. " (" .. string.format(L("recommend_usage_count"), e.count, fav) .. ")"
     end
 
     if #lines == 0 then
-        return "プラグインの使用履歴がまだありません。一般的なおすすめを提案してください。"
+        return L("recommend_no_history")
     end
-    return "以下はユーザーのプラグイン使用統計です（使用頻度順、★=お気に入り）:\n" .. table.concat(lines, "\n")
+    return L("recommend_usage_header") .. "\n" .. table.concat(lines, "\n")
 end
 
 --- Build HTML for the recommendation panel.
 ---@return string
 local function buildHTML()
-    return [[<!DOCTYPE html><html><head><meta charset="utf-8">
+    local template = [[<!DOCTYPE html><html lang="__LANG__"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { height: 100%; overflow: hidden; }
+html, body { color-scheme: dark; height: 100%; overflow: hidden; }
 body {
     background: #1c1c1e; color: #e5e5ea;
     font-family: -apple-system, "Helvetica Neue", sans-serif;
@@ -69,9 +85,9 @@ body {
     padding: 14px 16px 12px; border-bottom: 1px solid #2c2c2e; flex-shrink: 0;
 }
 .header h1 { font-size: 15px; font-weight: 600; color: #fff; }
-.header p { font-size: 11px; color: #636366; margin-top: 3px; }
+.header p { font-size: 11px; color: #a1a1a6; margin-top: 3px; }
 .content { flex: 1; overflow-y: auto; padding: 16px; }
-.loading { color: #636366; text-align: center; margin-top: 60px; line-height: 1.8; }
+.loading { color: #a1a1a6; text-align: center; margin-top: 60px; line-height: 1.8; }
 .result { line-height: 1.7; word-break: break-word; }
 .result h2,.result h3 { font-weight: 600; margin: 10px 0 4px; color: #d0d0d5; }
 .result h2 { font-size: 14px; } .result h3 { font-size: 13px; }
@@ -91,27 +107,34 @@ textarea {
     resize: none; height: 36px; outline: none;
 }
 textarea:focus { border-color: #0a84ff; }
-textarea::placeholder { color: #48484a; }
+textarea:focus-visible, button:focus-visible { outline: 2px solid #64d2ff; outline-offset: 2px; }
+textarea::placeholder { color: #a1a1a6; }
 button.send {
     background: #0a84ff; color: #fff; border: none; border-radius: 8px;
     padding: 0 14px; height: 36px; font-size: 13px; font-weight: 600;
     cursor: pointer; flex-shrink: 0;
 }
 button.send:hover { background: #409cff; }
+button.send:disabled { background: #3a3a3c; color: #a1a1a6; cursor: wait; }
 </style></head><body>
 <div class="header">
-  <h1>🔌 AI プラグイン提案</h1>
-  <p>使用統計をもとに AI がプラグインを提案します</p>
+  <h1>🔌 __TITLE__</h1>
+  <p>__SUBTITLE__</p>
 </div>
-<div class="content" id="content">
-  <div class="loading">プラグイン統計を分析中...</div>
+<div class="content" id="content" role="status" aria-live="polite" aria-busy="true">
+  <div class="loading">__LOADING_STATS__</div>
 </div>
 <div class="input-area">
-  <textarea id="inp" placeholder="追加の条件（例: ベースを太くしたい、Lo-Fi系）" rows="1"
+  <textarea id="inp" placeholder="__EXTRA_PLACEHOLDER__" rows="1"
+    maxlength="__MAX_EXTRA_CODE_UNITS__" aria-label="__EXTRA_LABEL__"
     onkeydown="if(event.key==='Enter'&&event.metaKey){event.preventDefault();ask();}"></textarea>
-  <button class="send" onclick="ask()">再提案</button>
+  <button id="send" type="button" class="send" onclick="ask()">__AGAIN_HTML__</button>
 </div>
 <script>
+var requestPending = false;
+var pendingExtra = null;
+var maxExtraLength = __MAX_EXTRA_LENGTH__;
+function charLength(value) { return Array.from(value).length; }
 function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function mdToHtml(md){
     var stash=[];
@@ -157,65 +180,115 @@ function setError(msg) {
     d.textContent = msg;
     c.appendChild(d);
 }
+function setRequestControls(pending) {
+    requestPending = pending;
+    var input = document.getElementById('inp');
+    var button = document.getElementById('send');
+    input.disabled = pending;
+    button.disabled = pending;
+    button.textContent = pending ? '__PENDING_JS__' : '__AGAIN_JS__';
+    document.getElementById('content').setAttribute('aria-busy', pending ? 'true' : 'false');
+}
+function recommendRequestStarted() {
+    setRequestControls(true);
+    setContent('<div class="loading">__LOADING_AI_JS__</div>');
+}
+function recommendRequestResult(ok) {
+    var input = document.getElementById('inp');
+    if (ok) {
+        if (pendingExtra !== null && input.value.trim() === pendingExtra) input.value = '';
+    }
+    pendingExtra = null;
+    setRequestControls(false);
+    input.focus();
+}
 function ask() {
+    if (requestPending) return;
     var extra = document.getElementById('inp').value.trim();
-    document.getElementById('inp').value = '';
-    setContent('<div class="loading">AI が考え中...</div>');
+    if (charLength(extra) > maxExtraLength) {
+        setError('__INPUT_TOO_LONG_JS__');
+        recommendRequestResult(false);
+        return;
+    }
+    pendingExtra = extra;
+    recommendRequestStarted();
     window.webkit.messageHandlers.airecommend.postMessage({action:'ask', extra: extra});
 }
 </script>
 </body></html>]]
+    return replaceTokens(template, {
+        LANG = htmlEscape(L("locale_code")),
+        TITLE = htmlEscape(L("recommend_title")),
+        SUBTITLE = htmlEscape(L("recommend_subtitle")),
+        LOADING_STATS = htmlEscape(L("recommend_loading_stats")),
+        EXTRA_PLACEHOLDER = htmlEscape(L("recommend_extra_placeholder")),
+        EXTRA_LABEL = htmlEscape(L("recommend_extra_label")),
+        AGAIN_HTML = htmlEscape(L("recommend_again")),
+        AGAIN_JS = jsEscape(L("recommend_again")),
+        PENDING_JS = jsEscape(L("recommend_pending")),
+        LOADING_AI_JS = jsEscape(L("recommend_loading_ai")),
+        INPUT_TOO_LONG_JS = jsEscape(string.format(L("recommend_input_too_long"), MAX_EXTRA_LENGTH)),
+        MAX_EXTRA_LENGTH = tostring(MAX_EXTRA_LENGTH),
+        MAX_EXTRA_CODE_UNITS = tostring(MAX_EXTRA_LENGTH * 2),
+    })
 end
 
 --- Request recommendations from OpenAI.
 ---@param extra string|nil  Additional user context
 local function fetchRecommendations(extra)
+    if _requestPending or not _webview then return false end
+
+    local requestWebview = _webview
+    _requestGeneration = _requestGeneration + 1
+    local requestGeneration = _requestGeneration
+    _requestPending = true
+    requestWebview:evaluateJavaScript("recommendRequestStarted();")
+
     local usage = buildUsageSummary()
-    local prompt = usage .. "\n\n"
-    prompt = prompt .. "上記の使用傾向に基づいて、ユーザーが気に入りそうなプラグイン（VST/AU）を5〜8個提案してください。\n"
-    prompt = prompt .. "各プラグインについて: 名前、種類（EQ/コンプ/シンセ等）、おすすめ理由を1行で。\n"
-    prompt = prompt .. "無料プラグインも含めてください。"
+    local prompt = usage .. "\n\n" .. L("recommend_user_prompt")
 
     if extra and extra ~= "" then
-        prompt = prompt .. "\n\nユーザーからの追加リクエスト: " .. extra
+        prompt = prompt .. "\n\n" .. string.format(L("recommend_extra_context"), extra)
     end
 
     local messages = {
-        { role = "system", content = "あなたは音楽制作プラグインの専門家です。Ableton Live ユーザー向けにプラグインを提案します。日本語で回答してください。" },
+        { role = "system", content = L("recommend_system_prompt") },
         { role = "user",   content = prompt },
     }
 
     openai.chat(messages, function(reply, err)
-        if not _webview then
-            print("[LES][ai.recommend] reply dropped: webview already closed")
+        if _webview ~= requestWebview or _requestGeneration ~= requestGeneration then
+            print("[LES][ai.recommend] reply dropped: request is no longer current")
             return
         end
+        _requestPending = false
         -- Always replace the loading spinner with either result or error so the
         -- panel can never be stranded on a nil/empty reply.
         if err or type(reply) ~= "string" or reply == "" then
-            local errMsg = err or "空の応答が返されました"
-            print("[LES][ai.recommend] reply error: " .. tostring(errMsg))
-            _webview:evaluateJavaScript(
-                string.format("setError('%s');", jsEscape(errMsg)))
+            local errMsg = err and L("ai_request_failed") or L("ai_empty_response")
+            print("[LES][ai.recommend] reply error: " .. tostring(err or "empty response"))
+            requestWebview:evaluateJavaScript(
+                string.format("setError('%s');recommendRequestResult(false);", jsEscape(errMsg)))
         else
-            _webview:evaluateJavaScript(
-                string.format("setMarkdown('%s');", jsEscape(reply)))
+            requestWebview:evaluateJavaScript(
+                string.format("setMarkdown('%s');recommendRequestResult(true);", jsEscape(reply)))
         end
     end)
+    return true
 end
 
 --- Open the plugin recommendation panel.
 ---@param extra string|nil
 function recommend.open(extra)
     if _webview ~= nil then
-        _webview:delete()
-        _webview = nil
-        _uc = nil
+        _webview:show()
+        _webview:bringToFront()
+        return
     end
 
     if not openai.isConfigured() then
         HSMakeAlert(programName,
-            "AI プラグイン提案を使うには、設定画面で OpenAI API キーを入力してください。",
+            L("recommend_config_required"),
             true, "warning")
         return
     end
@@ -224,26 +297,42 @@ function recommend.open(extra)
     _uc:setCallback(function(msg)
         if type(msg) ~= "table" or type(msg.body) ~= "table" then return end
         if msg.body.action == "ask" then
-            fetchRecommendations(msg.body.extra)
+            local extraText = type(msg.body.extra) == "string" and msg.body.extra or ""
+            if not utf8text.isWithinLimit(extraText, MAX_EXTRA_LENGTH) then
+                local errorMessage = string.format(L("recommend_input_too_long"), MAX_EXTRA_LENGTH)
+                if _webview then
+                    _webview:evaluateJavaScript(string.format(
+                        "setError('%s');recommendRequestResult(false);",
+                        jsEscape(errorMessage)))
+                end
+                return
+            end
+            fetchRecommendations(extraText)
         end
     end)
 
     local screen = hs.screen.mainScreen():frame()
-    local W, H = 480, 520
-    local x = math.floor(screen.x + (screen.w - W) / 2)
-    local y = math.floor(screen.y + (screen.h - H) / 2)
+    local frame = windowframe.center(screen, 480, 520, 12)
 
     _webview = hs.webview.new(
-        { x = x, y = y, w = W, h = H },
+        frame,
         { developerExtrasEnabled = false },
         _uc
     )
+    if _webview == nil then
+        _uc = nil
+        return
+    end
     _webview:windowStyle({ "titled", "closable", "resizable" })
-    _webview:windowTitle("AI プラグイン提案")
+    _webview:windowTitle(L("recommend_title"))
     _webview:allowTextEntry(true)
     _webview:html(buildHTML())
+    _webview:deleteOnClose(true)
+    local requestWebview = _webview
     _webview:windowCallback(function(action)
-        if action == "closing" then
+        if action == "closing" and _webview == requestWebview then
+            _requestGeneration = _requestGeneration + 1
+            _requestPending = false
             _webview = nil
             _uc = nil
         end
@@ -252,7 +341,15 @@ function recommend.open(extra)
     _webview:bringToFront()
 
     -- Auto-fetch on open
-    fetchRecommendations(extra)
+    local initialExtra = type(extra) == "string" and extra or ""
+    if not utf8text.isWithinLimit(initialExtra, MAX_EXTRA_LENGTH) then
+        local errorMessage = string.format(L("recommend_input_too_long"), MAX_EXTRA_LENGTH)
+        _webview:evaluateJavaScript(string.format(
+            "setError('%s');recommendRequestResult(false);",
+            jsEscape(errorMessage)))
+        return
+    end
+    fetchRecommendations(initialExtra)
 end
 
 return recommend

@@ -53,19 +53,28 @@ function ShellCopy(source, destination)
     local srcFile = io.open(source, "rb")
     if srcFile == nil then
         print("ShellCopy(): failed to open source: " .. source)
-        return
+        return false
     end
-    local content = srcFile:read("*a")
-    srcFile:close()
+    local content, readError = srcFile:read("*a")
+    local sourceClosed = srcFile:close()
+    if content == nil or sourceClosed == false then
+        print("ShellCopy(): failed to read source: " .. source .. ": " .. tostring(readError))
+        return false
+    end
 
     local dstFile = io.open(dest, "wb")
     if dstFile == nil then
         print("ShellCopy(): failed to open destination: " .. dest)
-        return
+        return false
     end
-    dstFile:write(content)
-    dstFile:close()
+    local writeOK, writeError = dstFile:write(content)
+    local destinationClosed = dstFile:close()
+    if writeOK == nil or destinationClosed == false then
+        print("ShellCopy(): failed to write destination: " .. dest .. ": " .. tostring(writeError))
+        return false
+    end
     print("ShellCopy(): copied " .. source .. " -> " .. dest)
+    return true
 end
 
 -- Recursive copy using hs.fs for directory traversal and pure Lua I/O

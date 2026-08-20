@@ -8791,7 +8791,7 @@
 				MTL_ENABLE_DEBUG_INFO = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = "org.les.$(PRODUCT_NAME:rfc1034identifier)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Hammerspoon.app/Contents/MacOS/Hammerspoon";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/$(LES_HOST_APP_NAME).app/Contents/MacOS/$(LES_HOST_APP_NAME)";
 				WARNING_CFLAGS = (
 					"-Wno-cstring-format-directive",
 					"-Wno-padded",
@@ -10597,7 +10597,7 @@
 				MTL_ENABLE_DEBUG_INFO = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = "org.les.$(PRODUCT_NAME:rfc1034identifier)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Hammerspoon.app/Contents/MacOS/Hammerspoon";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/$(LES_HOST_APP_NAME).app/Contents/MacOS/$(LES_HOST_APP_NAME)";
 				WARNING_CFLAGS = (
 					"-Wno-cstring-format-directive",
 					"-Wno-padded",
@@ -10627,7 +10627,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = "org.les.$(PRODUCT_NAME:rfc1034identifier)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Hammerspoon.app/Contents/MacOS/Hammerspoon";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/$(LES_HOST_APP_NAME).app/Contents/MacOS/$(LES_HOST_APP_NAME)";
 				WARNING_CFLAGS = (
 					"-Wno-cstring-format-directive",
 					"-Wno-padded",

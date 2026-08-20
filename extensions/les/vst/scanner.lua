@@ -17,61 +17,129 @@
 ---------------------------------------------------
 
 local scanner = {}
+local MAX_MODULEINFO_BYTES = 4 * 1024 * 1024
+local windowframe = require("util.windowframe")
 
 ---@type hs.webview|nil
 local scanProgressWV = nil
+---@type hs.task|nil
+local activeAUTask = nil
+local scanInProgress = false
+local scanProgressPercent = 0
+local scanProgressLabel = ""
 
 local function escapeScanHtml(s)
     return (tostring(s or ""):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;"))
 end
 
+local function localized(key, fallback)
+    if type(L) == "function" then
+        local value = L(key)
+        if type(value) == "string" and value ~= key then return value end
+    end
+    return fallback
+end
+
+local function localizedFormat(key, fallback, ...)
+    return string.format(localized(key, fallback), ...)
+end
+
+local function currentLanguage()
+    return _G.uiLanguage == "en" and "en" or "ja"
+end
+
+local function jsString(value)
+    local escaped = tostring(value or ""):gsub("\\", "\\\\"):gsub("'", "\\'")
+        :gsub("\n", "\\n"):gsub("\r", "\\r"):gsub("<", "\\x3c"):gsub(">", "\\x3e")
+        :gsub("\u{2028}", "\\u2028"):gsub("\u{2029}", "\\u2029")
+    return "'" .. escaped .. "'"
+end
+
 local function scanProgressHTML(pct, label)
     local p = math.max(0, math.min(100, math.floor(tonumber(pct) or 0)))
     return string.format(
-        [[<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+        [[<!DOCTYPE html><html lang="%s"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#1c1c1e;color:#e5e5ea;padding:18px 20px;min-width:300px;}
+body{color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#1c1c1e;color:#e5e5ea;padding:18px 20px;}
 h1{font-size:14px;font-weight:600;margin-bottom:12px;color:#fff;}
 #barwrap{background:#2c2c2e;border-radius:6px;height:10px;overflow:hidden;margin-bottom:8px;}
 #bar{height:100%%;width:%d%%;background:#0a84ff;border-radius:6px;transition:width .2s ease;}
 p{font-size:11px;color:#8e8e93;line-height:1.45;}
 </style></head><body>
-<h1>%s</h1><div id="barwrap"><div id="bar"></div></div>
-<p>system_profiler と VST3 バンドル走査のため、数十秒かかることがあります。このウィンドウは完了後に閉じます。</p>
+<h1 id="scanLabel" role="status" aria-live="polite">%s</h1>
+<div id="barwrap"><div id="bar" role="progressbar" aria-label="%s" aria-valuemin="0" aria-valuemax="100" aria-valuenow="%d"></div></div>
+<p>%s</p>
+<script>
+function setProgress(percent,label){
+  var value=Math.max(0,Math.min(100,Math.floor(Number(percent)||0)));
+  var bar=document.getElementById('bar');
+  bar.style.width=value+'%%';bar.setAttribute('aria-valuenow',String(value));
+  var heading=document.getElementById('scanLabel');heading.textContent=label;bar.setAttribute('aria-label',label);
+}
+</script>
 </body></html>]],
+        currentLanguage(),
         p,
-        escapeScanHtml(label)
+        escapeScanHtml(label),
+        escapeScanHtml(label),
+        p,
+        escapeScanHtml(localized("scanner_progress_detail",
+            "system_profiler と VST3 バンドル走査のため、数十秒かかることがあります。このウィンドウは完了後に閉じます。"))
     )
 end
 
 local function openScanProgress()
     if scanProgressWV then
-        scanProgressWV:delete()
+        local previous = scanProgressWV
         scanProgressWV = nil
+        previous:delete()
     end
     local screen = hs.screen.mainScreen():frame()
-    local ww, wh = 380, 132
-    local x = screen.x + math.floor((screen.w - ww) / 2)
-    local y = screen.y + math.floor((screen.h - wh) / 3)
-    scanProgressWV = hs.webview.new({ x = x, y = y, w = ww, h = wh })
-    scanProgressWV:windowStyle({ "titled", "closable" })
-    scanProgressWV:windowTitle("プラグインスキャン")
+    local frame = windowframe.center(screen, 380, 150, 12)
+    scanProgressWV = hs.webview.new(frame)
+    if scanProgressWV == nil then return end
+    local currentWebview = scanProgressWV
+    scanProgressWV:deleteOnClose(true)
+    scanProgressWV:windowStyle({ "titled", "closable", "resizable" })
+    scanProgressWV:windowTitle(localized("scanner_title", "プラグインスキャン"))
     scanProgressWV:level(hs.drawing.windowLevels.floating)
-    scanProgressWV:html(scanProgressHTML(0, "準備中…"))
+    scanProgressWV:windowCallback(function(action)
+        if action == "closing" and scanProgressWV == currentWebview then scanProgressWV = nil end
+    end)
+    local label = scanProgressLabel ~= "" and scanProgressLabel
+        or localized("scanner_preparing", "準備中…")
+    scanProgressWV:html(scanProgressHTML(scanProgressPercent, label))
+    scanProgressWV:show()
+    scanProgressWV:bringToFront()
+end
+
+local function showScanProgress()
+    if scanProgressWV == nil then
+        openScanProgress()
+        return
+    end
     scanProgressWV:show()
     scanProgressWV:bringToFront()
 end
 
 local function setScanProgress(pct, label)
-    if scanProgressWV then
-        scanProgressWV:html(scanProgressHTML(pct, label))
+    scanProgressPercent = math.max(0, math.min(100, math.floor(tonumber(pct) or 0)))
+    scanProgressLabel = tostring(label or "")
+    local currentWebview = scanProgressWV
+    if not currentWebview then return end
+    local progress = scanProgressPercent
+    local script = string.format("setProgress(%d,%s)", progress, jsString(scanProgressLabel))
+    local ok = pcall(function() currentWebview:evaluateJavaScript(script) end)
+    if not ok and scanProgressWV == currentWebview then
+        currentWebview:html(scanProgressHTML(progress, scanProgressLabel))
     end
 end
 
 local function closeScanProgress()
     if scanProgressWV then
-        scanProgressWV:delete()
+        local currentWebview = scanProgressWV
         scanProgressWV = nil
+        currentWebview:delete()
     end
 end
 
@@ -249,16 +317,12 @@ end
 --  System scanning (AU + VST3)
 -- ═══════════════════════════════════════════════════════════════════════
 
---- Scan Audio Unit plugins using system_profiler.
+--- Parse `system_profiler SPAudioDataType` output.
+---@param output string|nil
 ---@return table
-function scanner.scanAU()
+function scanner.parseAUOutput(output)
     local results = {}
-    local handle = io.popen("/usr/sbin/system_profiler SPAudioDataType 2>/dev/null")
-    if not handle then return results end
-    local output = handle:read("*a")
-    handle:close()
-
-    if not output or output == "" then return results end
+    if type(output) ~= "string" or output == "" then return results end
 
     local currentName = nil
     local linesSinceName = 0
@@ -300,6 +364,59 @@ function scanner.scanAU()
     return results
 end
 
+--- Scan Audio Unit plugins synchronously. Retained for non-UI callers.
+---@return table
+function scanner.scanAU()
+    local handle = io.popen("/usr/sbin/system_profiler SPAudioDataType 2>/dev/null")
+    if not handle then return {} end
+    local output = handle:read("*a")
+    handle:close()
+    return scanner.parseAUOutput(output)
+end
+
+--- Scan Audio Unit plugins without blocking the Hammerspoon run loop.
+---@param callback fun(results: table|nil, err: string|nil)
+---@return hs.task|nil task
+---@return string|nil err
+function scanner.scanAUAsync(callback)
+    if type(callback) ~= "function" then
+        return nil, "Audio Unit scan callback must be a function"
+    end
+    if activeAUTask ~= nil then
+        return nil, "Audio Unit scan is already running"
+    end
+    if not hs.task or type(hs.task.new) ~= "function" then
+        return nil, "hs.task is unavailable"
+    end
+
+    local created, taskOrError = pcall(
+        hs.task.new,
+        "/usr/sbin/system_profiler",
+        function(exitCode, stdOut, stdErr)
+            activeAUTask = nil
+            if exitCode ~= 0 then
+                local detail = tostring(stdErr or ""):match("^%s*(.-)%s*$")
+                if detail == "" then detail = "exit " .. tostring(exitCode) end
+                callback(nil, "system_profiler failed: " .. detail)
+                return
+            end
+            callback(scanner.parseAUOutput(stdOut), nil)
+        end,
+        {"SPAudioDataType"}
+    )
+    if not created or taskOrError == nil then
+        return nil, "unable to create system_profiler task: " .. tostring(taskOrError)
+    end
+
+    activeAUTask = taskOrError
+    local started, startResult = pcall(function() return taskOrError:start() end)
+    if not started or not startResult then
+        activeAUTask = nil
+        return nil, "unable to start system_profiler task: " .. tostring(startResult)
+    end
+    return taskOrError
+end
+
 --- Scan VST3 plugins by reading moduleinfo.json from .vst3 bundles.
 ---@return table
 function scanner.scanVST3()
@@ -323,12 +440,14 @@ function scanner.scanVST3()
                     local miPath = bundlePath .. "/Contents/moduleinfo.json"
                     local mf = io.open(miPath, "r")
                     if mf then
-                        local raw = mf:read("*a")
+                        local raw = mf:read(MAX_MODULEINFO_BYTES + 1)
                         mf:close()
-                        local subcat = raw:match('"sub_categories"%s*:%s*"([^"]+)"')
-                            or raw:match('"subcategories"%s*:%s*%[%s*"([^"]+)"')
-                            or raw:match('"category"%s*:%s*"([^"]+)"')
-                        category = scanner.classifyByVST3Subcat(subcat)
+                        if raw and #raw <= MAX_MODULEINFO_BYTES then
+                            local subcat = raw:match('"sub_categories"%s*:%s*"([^"]+)"')
+                                or raw:match('"subcategories"%s*:%s*%[%s*"([^"]+)"')
+                                or raw:match('"category"%s*:%s*"([^"]+)"')
+                            category = scanner.classifyByVST3Subcat(subcat)
+                        end
                     end
 
                     if not category then
@@ -412,12 +531,13 @@ local function computeDiffAndUpdateCache(cache, current)
         end
     end
 
-    scanner.saveCache({
+    local cacheSaved = scanner.saveCache({
         plugins    = current,
         scanned_at = math.floor(hs.timer.secondsSinceEpoch()),
     })
 
-    return added, removed, current
+    local cacheError = cacheSaved and nil or "plugin cache write failed"
+    return added, removed, current, cacheError
 end
 
 --- Perform incremental scan. Returns added, removed, and full results.
@@ -530,7 +650,8 @@ end
 --- Append new plugins to existing menuconfig.ini (before the End marker).
 --- Only adds plugins not already present. Groups by category.
 ---@param newPlugins table<string, table>  { [name] = { category, format } }
----@return number  Count of plugins actually appended
+---@return number|nil count Count of plugins actually appended, or nil on persistence failure
+---@return string|nil errorMessage
 function scanner.appendToMenuconfig(newPlugins)
     local existing = getExistingPluginNames()
 
@@ -549,7 +670,10 @@ function scanner.appendToMenuconfig(newPlugins)
 
     -- Read current menuconfig.ini
     local menuLines = {}
-    fileToTable(GetDataPath(MenuConfigFile), menuLines)
+    local readCallOK, readResult = pcall(fileToTable, GetDataPath(MenuConfigFile), menuLines)
+    if not readCallOK or readResult ~= true then
+        return nil, "menuconfig read failed"
+    end
 
     -- Find the "End" marker line index
     local endIdx = nil
@@ -559,7 +683,9 @@ function scanner.appendToMenuconfig(newPlugins)
             break
         end
     end
-    if not endIdx then endIdx = #menuLines + 1 end
+    if not endIdx then
+        return nil, "menuconfig End marker missing"
+    end
 
     -- Build insertion lines grouped by category
     local categorized = groupByCategory(toAdd)
@@ -609,8 +735,44 @@ function scanner.appendToMenuconfig(newPlugins)
         table.insert(menuLines, endIdx, insertLines[i])
     end
 
-    tableToFile(GetDataPath(MenuConfigFile), menuLines)
+    local writeCallOK, persisted = pcall(tableToFile, GetDataPath(MenuConfigFile), menuLines)
+    if not writeCallOK or persisted ~= true then
+        return nil, "menuconfig write failed"
+    end
     return count
+end
+
+--- Back up and atomically replace menuconfig.ini with a generated configuration.
+---@param plugins table<string, table>
+---@param timestamp number|nil
+---@return boolean ok
+---@return string|nil errorMessage
+---@return string|nil backupFilename
+function scanner.saveGeneratedMenuconfig(plugins, timestamp)
+    local path = GetDataPath(MenuConfigFile)
+    local backupFilename = nil
+    local backupTimestamp = math.floor(tonumber(timestamp) or hs.timer.secondsSinceEpoch())
+    local hasExistingFile = type(ioIsFilePresent) == "function" and ioIsFilePresent(path)
+
+    if hasExistingFile then
+        backupFilename = string.format("menuconfig_%d.ini", backupTimestamp)
+        local backupPath = GetDataPath(backupFilename)
+        if type(ShellCopy) ~= "function" or ShellCopy(path, backupPath) ~= true then
+            return false, "menuconfig backup failed"
+        end
+    end
+
+    local content = scanner.generateMenuconfig(plugins)
+    local lines = {}
+    for line in (content .. "\n"):gmatch("(.-)\n") do
+        lines[#lines + 1] = line
+    end
+    local writeCallOK, persisted = pcall(tableToFile, path, lines)
+    if not writeCallOK or persisted ~= true then
+        return false, "menuconfig write failed"
+    end
+
+    return true, nil, backupFilename
 end
 
 -- ═══════════════════════════════════════════════════════════════════════
@@ -633,38 +795,41 @@ local function presentPluginScanResults(hasCache, added, removed, all)
     if totalCount == 0 then
         HSMakeAlert(
             programName,
-            "プラグインが見つかりませんでした。\n\n"
-            .. "AU / VST3 プラグインがインストールされているか確認してください。",
+            localized("scanner_no_plugins",
+                "プラグインが見つかりませんでした。\n\nAU / VST3 プラグインがインストールされているか確認してください。"),
             true
         )
         return
     end
 
     if not hasCache then
-        local message = string.format(
-            "初回スキャン: %d 個のプラグインを検出しました。\n\n"
-            .. "カテゴリ分類済みの menuconfig.ini を生成しますか？\n"
-            .. "（現在のファイルはバックアップされます）",
+        local message = localizedFormat(
+            "scanner_first_scan_prompt",
+            "初回スキャン: %d 個のプラグインを検出しました。\n\nカテゴリ分類済みの menuconfig.ini を生成しますか？\n（現在のファイルはバックアップされます）",
             totalCount
         )
         if HSMakeQuery(programName, message) then
             local timestamp = math.floor(hs.timer.secondsSinceEpoch())
-            ShellCopy(
-                strJoinPaths(ScriptUserPath, "menuconfig.ini"),
-                strJoinPaths(ScriptUserPath, string.format("menuconfig_%d.ini", timestamp))
-            )
-            local content = scanner.generateMenuconfig(all)
-            local f = io.open(GetDataPath("menuconfig.ini"), "w")
-            if f then
-                f:write(content)
-                f:close()
+            local saved, saveError, backupFilename = scanner.saveGeneratedMenuconfig(all, timestamp)
+            if not saved then
+                print("[LES][scanner] menuconfig generation failed: " .. tostring(saveError))
+                HSMakeAlert(
+                    programName,
+                    localized("scanner_menuconfig_save_failed",
+                        "menuconfig.ini の保存に失敗しました。既存の設定は変更していません。"),
+                    true,
+                    "warning"
+                )
+                return
             end
+            local backupMessage = backupFilename and ("\n" .. localizedFormat(
+                "scanner_backup_created", "バックアップ: %s", backupFilename)) or ""
             HSMakeAlert(
                 programName,
-                string.format(
-                    "menuconfig.ini を生成しました（%d プラグイン）\n"
-                    .. "バックアップ: menuconfig_%d.ini",
-                    totalCount, timestamp
+                localizedFormat(
+                    "scanner_menuconfig_generated",
+                    "menuconfig.ini を生成しました（%d プラグイン）%s",
+                    totalCount, backupMessage
                 ),
                 true
             )
@@ -676,9 +841,9 @@ local function presentPluginScanResults(hasCache, added, removed, all)
     if addedCount == 0 and removedCount == 0 then
         HSMakeAlert(
             programName,
-            string.format(
-                "変更なし（%d プラグイン検出済み）\n\n"
-                .. "新しいプラグインは見つかりませんでした。",
+            localizedFormat(
+                "scanner_no_changes",
+                "変更なし（%d プラグイン検出済み）\n\n新しいプラグインは見つかりませんでした。",
                 totalCount
             ),
             true
@@ -688,7 +853,7 @@ local function presentPluginScanResults(hasCache, added, removed, all)
 
     local parts = {}
     if addedCount > 0 then
-        parts[#parts + 1] = string.format("新規: %d 個", addedCount)
+        parts[#parts + 1] = localizedFormat("scanner_new_count", "新規: %d 個", addedCount)
         local names = {}
         for name, _ in pairs(added) do
             names[#names + 1] = name
@@ -699,29 +864,45 @@ local function presentPluginScanResults(hasCache, added, removed, all)
             parts[#parts + 1] = "  + " .. n
         end
         if addedCount > 5 then
-            parts[#parts + 1] = string.format("  ... 他 %d 個", addedCount - 5)
+            parts[#parts + 1] = localizedFormat(
+                "scanner_more_count", "  ... 他 %d 個", addedCount - 5)
         end
     end
     if removedCount > 0 then
-        parts[#parts + 1] = string.format("\nアンインストール済み: %d 個", removedCount)
+        parts[#parts + 1] = localizedFormat(
+            "scanner_removed_count", "\nアンインストール済み: %d 個", removedCount)
     end
 
     local message = table.concat(parts, "\n")
-        .. "\n\n新規プラグインを menuconfig.ini に追加しますか？\n（既存のメニュー構成は維持されます）"
+        .. "\n\n" .. localized("scanner_append_prompt",
+            "新規プラグインを menuconfig.ini に追加しますか？\n（既存のメニュー構成は維持されます）")
 
     if HSMakeQuery(programName, message) then
-        local appended = scanner.appendToMenuconfig(added)
-        if appended > 0 then
+        local appended, appendError = scanner.appendToMenuconfig(added)
+        if appended == nil then
+            print("[LES][scanner] menuconfig append failed: " .. tostring(appendError))
             HSMakeAlert(
                 programName,
-                string.format("%d 個のプラグインを menuconfig.ini に追加しました。", appended),
+                localized("scanner_menuconfig_save_failed",
+                    "menuconfig.ini の保存に失敗しました。既存の設定は変更していません。"),
+                true,
+                "warning"
+            )
+        elseif appended > 0 then
+            HSMakeAlert(
+                programName,
+                localizedFormat(
+                    "scanner_plugins_appended",
+                    "%d 個のプラグインを menuconfig.ini に追加しました。",
+                    appended),
                 true
             )
             reloadLES()
         else
             HSMakeAlert(
                 programName,
-                "追加対象のプラグインはすべて menuconfig.ini に存在していました。",
+                localized("scanner_plugins_already_present",
+                    "追加対象のプラグインはすべて menuconfig.ini に存在していました。"),
                 true
             )
         end
@@ -731,52 +912,106 @@ end
 --- Incremental scan: detect new plugins and append to menuconfig.ini.
 --- Shows a progress window (AU → VST3 → merge) so long system_profiler runs are visible.
 function scanner.scanAndPrompt()
+    if scanInProgress then
+        showScanProgress()
+        return false
+    end
+
+    scanInProgress = true
+    scanProgressPercent = 0
+    scanProgressLabel = localized("scanner_preparing", "準備中…")
     openScanProgress()
-    setScanProgress(2, "準備中…")
+    setScanProgress(2, localized("scanner_preparing", "準備中…"))
 
     hs.timer.doAfter(0.08, function()
         local ok, err = pcall(function()
             local cache = scanner.loadCache()
             local hasCache = cache.scanned_at > 0
-            setScanProgress(10, "Audio Units を検出中（system_profiler）…")
-            local auPlugins = scanner.scanAU()
-            hs.timer.doAfter(0.08, function()
-                local ok2, err2 = pcall(function()
-                    setScanProgress(44, "VST3 バンドルを検出中…")
-                    local vst3Plugins = scanner.scanVST3()
-                    hs.timer.doAfter(0.08, function()
-                        local ok3, err3 = pcall(function()
-                            setScanProgress(78, "統合とキャッシュを更新…")
-                            local merged = mergePluginLists(auPlugins, vst3Plugins)
-                            local added, removed, _all = computeDiffAndUpdateCache(cache, merged)
-                            setScanProgress(100, "完了")
-                            closeScanProgress()
-                            presentPluginScanResults(hasCache, added, removed, merged)
-                        end)
-                        if not ok3 then
-                            closeScanProgress()
-                            HSMakeAlert(programName, "スキャン完了処理でエラー:\n" .. tostring(err3), true, "critical")
-                        end
-                    end)
-                end)
-                if not ok2 then
+            setScanProgress(10, localized("scanner_detecting_au", "Audio Units を検出中（system_profiler）…"))
+            local task, taskError = scanner.scanAUAsync(function(auPlugins, auError)
+                if auError then
+                    scanInProgress = false
                     closeScanProgress()
-                    HSMakeAlert(programName, "VST3 スキャンでエラー:\n" .. tostring(err2), true, "critical")
+                    HSMakeAlert(programName, localizedFormat(
+                        "scanner_au_error", "Audio Unit スキャンでエラー:\n%s", auError), true, "critical")
+                    return
                 end
+
+                hs.timer.doAfter(0.08, function()
+                    local ok2, err2 = pcall(function()
+                        setScanProgress(44, localized("scanner_detecting_vst3", "VST3 バンドルを検出中…"))
+                        local vst3Plugins = scanner.scanVST3()
+                        hs.timer.doAfter(0.08, function()
+                            local ok3, err3 = pcall(function()
+                                setScanProgress(78, localized("scanner_updating_cache", "統合とキャッシュを更新…"))
+                                local merged = mergePluginLists(auPlugins, vst3Plugins)
+                                local added, removed, _, cacheError = computeDiffAndUpdateCache(cache, merged)
+                                if cacheError then
+                                    scanInProgress = false
+                                    closeScanProgress()
+                                    HSMakeAlert(
+                                        programName,
+                                        localized("scanner_cache_save_failed",
+                                            "Plugin cache could not be saved. Check folder permissions and free space."),
+                                        true,
+                                        "warning"
+                                    )
+                                    return
+                                end
+                                setScanProgress(100, localized("scanner_complete", "完了"))
+                                scanInProgress = false
+                                closeScanProgress()
+                                presentPluginScanResults(hasCache, added, removed, merged)
+                            end)
+                            if not ok3 then
+                                scanInProgress = false
+                                closeScanProgress()
+                                HSMakeAlert(programName, localizedFormat(
+                                    "scanner_finish_error", "スキャン完了処理でエラー:\n%s", tostring(err3)),
+                                    true, "critical")
+                            end
+                        end)
+                    end)
+                    if not ok2 then
+                        scanInProgress = false
+                        closeScanProgress()
+                        HSMakeAlert(programName, localizedFormat(
+                            "scanner_vst3_error", "VST3 スキャンでエラー:\n%s", tostring(err2)),
+                            true, "critical")
+                    end
+                end)
             end)
+            if not task then error(taskError) end
         end)
         if not ok then
+            scanInProgress = false
             closeScanProgress()
-            HSMakeAlert(programName, "スキャン開始でエラー:\n" .. tostring(err), true, "critical")
+            HSMakeAlert(programName, localizedFormat(
+                "scanner_start_error", "スキャン開始でエラー:\n%s", tostring(err)), true, "critical")
         end
     end)
+    return true
 end
 
 --- Force a full rescan, ignoring cache. Regenerates menuconfig.ini entirely.
 function scanner.forceFullScan()
+    if scanInProgress then
+        showScanProgress()
+        return false
+    end
     -- Clear cache to force fresh scan
-    scanner.saveCache({ plugins = {}, scanned_at = 0 })
+    if not scanner.saveCache({ plugins = {}, scanned_at = 0 }) then
+        HSMakeAlert(
+            programName,
+            localized("scanner_cache_clear_failed",
+                "Plugin cache could not be cleared. The full scan was not started."),
+            true,
+            "warning"
+        )
+        return false
+    end
     scanner.scanAndPrompt()
+    return true
 end
 
 return scanner

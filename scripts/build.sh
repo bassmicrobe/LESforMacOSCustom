@@ -7,7 +7,7 @@ export IS_CI=${IS_CI:-0}
 export IS_NIGHTLY=${IS_NIGHTLY:-0}
 
 # Make it easy to fork us
-export APP_NAME="${APP_NAME:-"Hammerspoon"}"
+export APP_NAME="${APP_NAME:-"Live Enhancement Suite Custom"}"
 
 # Set some defaults that we'll override based on command line arguments
 XCODE_SCHEME="Hammerspoon"
@@ -114,113 +114,91 @@ fi
 #    usage
 #fi;
 
-# Parse the rest of any arguments
-PARSED_ARGUMENTS=$(getopt ds:c:x:ujmtqakly:z:w:ep:o:r $*)
-if [ $? != 0 ]; then
-    usage
-fi
-set -- $PARSED_ARGUMENTS
-
-# Translate the parsed arguments into our defaults
-for i
-do
-    case "$i" in
-        -d)
-            DEBUG=1
-            shift;;
-        -s)
-            XCODE_SCHEME=${2}; shift
-            shift;;
-        -c)
-            XCODE_CONFIGURATION=${2}; shift
-            shift;;
-        -x)
-            XCCONFIG_FILE=${2}; shift
-            shift;;
-        -u)
-            UPLOAD_DSYM=1
-            shift;;
-        -e)
-            BUILD_FOR_TESTING=1
-            shift;;
-        -j)
+# Parse the rest of any arguments with Bash's builtin parser so values that
+# contain spaces (notably xcconfig paths) remain a single argument.
+while getopts ":ds:c:x:ujmtqakly:z:w:ep:o:r" i; do
+    case "${i}" in
+        d)
+            DEBUG=1;;
+        s)
+            XCODE_SCHEME=${OPTARG};;
+        c)
+            XCODE_CONFIGURATION=${OPTARG};;
+        x)
+            XCCONFIG_FILE=${OPTARG};;
+        u)
+            UPLOAD_DSYM=1;;
+        e)
+            BUILD_FOR_TESTING=1;;
+        j)
             # JSON can be built without any of the others
             DOCS_MD=0
             DOCS_HTML=0
             DOCS_SQL=0
             DOCS_DASH=0
             DOCS_LUASKIN=0
-            DOCS_LINT_ONLY=0
-            shift;;
-        -m)
+            DOCS_LINT_ONLY=0;;
+        m)
             # Markdown requires JSON, so leave that enabled
             DOCS_HTML=0
             DOCS_SQL=0
             DOCS_DASH=0
             DOCS_LUASKIN=0
-            DOCS_LINT_ONLY=0
-            shift;;
-        -t)
+            DOCS_LINT_ONLY=0;;
+        t)
             # HTML requires JSON, so leave that enabled
             DOCS_MD=0
             DOCS_SQL=0
             DOCS_DASH=0
             DOCS_LUASKIN=0
-            DOCS_LINT_ONLY=0
-            shift;;
-        -q)
+            DOCS_LINT_ONLY=0;;
+        q)
             # SQLite requires JSON, so leave that enabled
             DOCS_MD=0
             DOCS_HTML=0
             DOCS_DASH=0
             DOCS_LUASKIN=0
-            DOCS_LINT_ONLY=0
-            shift;;
-        -a)
+            DOCS_LINT_ONLY=0;;
+        a)
             # Dash requires JSON, SQLite, LuaSkin and HTML
             DOCS_MD=0
-            DOCS_LINT_ONLY=0
-            shift;;
-        -k)
+            DOCS_LINT_ONLY=0;;
+        k)
             # LuaSkin requires nothing else
             DOCS_JSON=0
             DOCS_MD=0
             DOCS_HTML=0
             DOCS_SQL=0
             DOCS_DASH=0
-            DOCS_LINT_ONLY=0
-            shift;;
-        -l)
+            DOCS_LINT_ONLY=0;;
+        l)
             # Linting requires no other docs to be built
             DOCS_JSON=0
             DOCS_MD=0
             DOCS_HTML=0
             DOCS_SQL=0
             DOCS_DASH=0
-            DOCS_LINT_ONLY=1
-            shift;;
-        -y)
-            KEYCHAIN_PROFILE=${2}; shift
-            shift;;
-        -z)
-            NOTARIZATION_FILE=${2}; shift
-            shift;;
-        -p)
-            P12_FILE="${2}"; shift
-            shift;;
-        -o)
-            NOTARIZATION_CREDS_FILE="${2}"; shift
-            shift;;
-        -w)
-            TWITTER_ACCOUNT=${2}; shift
-            shift;;
-        -r)
-            INSTALLDEPS_FULL=1
-            shift;;
-        --)
-            shift; break;;
+            DOCS_LINT_ONLY=1;;
+        y)
+            KEYCHAIN_PROFILE=${OPTARG};;
+        z)
+            NOTARIZATION_FILE=${OPTARG};;
+        p)
+            P12_FILE="${OPTARG}";;
+        o)
+            NOTARIZATION_CREDS_FILE="${OPTARG}";;
+        w)
+            TWITTER_ACCOUNT=${OPTARG};;
+        r)
+            INSTALLDEPS_FULL=1;;
+        :|\?)
+            usage;;
     esac
 done
+shift $((OPTIND - 1))
+if [ "$#" -ne 0 ]; then
+    usage
+fi
 
 # If the user asked for debugging, print out some settings and enable bash tracing
 if [ ${DEBUG} == 1 ]; then
@@ -296,7 +274,15 @@ export CI_ARTIFACTS_HOME="${HAMMERSPOON_HOME}/artifacts"
 export HAMMERSPOON_BUNDLE_NAME="${APP_NAME}.app"
 export HAMMERSPOON_BUNDLE_PATH="${BUILD_HOME}/${HAMMERSPOON_BUNDLE_NAME}"
 export HAMMERSPOON_XCARCHIVE_PATH="${HAMMERSPOON_BUNDLE_PATH}.xcarchive"
-export XCODE_BUILT_PRODUCTS_DIR ; XCODE_BUILT_PRODUCTS_DIR="$(xcodebuild -workspace Hammerspoon.xcworkspace -scheme "${XCODE_SCHEME}" -configuration "${XCODE_CONFIGURATION}" -destination "platform=macOS" -showBuildSettings | sort | uniq | grep ' BUILT_PRODUCTS_DIR =' | awk '{ print $3 }')"
+XCODE_CONFIG_ARGS=()
+if [ -n "${XCCONFIG_FILE}" ]; then
+    if [ ! -f "${XCCONFIG_FILE}" ]; then
+        echo "ERROR: xcconfig file does not exist: ${XCCONFIG_FILE}" >&2
+        exit 1
+    fi
+    XCODE_CONFIG_ARGS=(-xcconfig "${XCCONFIG_FILE}")
+fi
+export XCODE_BUILT_PRODUCTS_DIR ; XCODE_BUILT_PRODUCTS_DIR="$(xcodebuild -workspace Hammerspoon.xcworkspace -scheme "${XCODE_SCHEME}" -configuration "${XCODE_CONFIGURATION}" -destination "platform=macOS" "${XCODE_CONFIG_ARGS[@]}" -showBuildSettings | sort | uniq | grep ' BUILT_PRODUCTS_DIR =' | awk '{ print $3 }')"
 export DOCS_SEARCH_DIRS=("Hammerspoon" "extensions/")
 
 # Calculate private token variables

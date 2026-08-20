@@ -4,6 +4,9 @@
 # Rebuild script
 /rebuild.sh
 
+# Per-user AI tooling permissions/hooks must never be shared by the repository.
+/.claude/settings.local.json
+
 # Build artifacts
 /Hammerspoon.app
 /Hammerspoon*.zip
@@ -42,4 +45,3 @@ xcuserdata/
 *.moved-aside
 *.xccheckout
 *.xcscmblueprint
-
