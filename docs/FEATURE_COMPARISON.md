@@ -24,7 +24,7 @@
 | プロジェクトバージョニング | `Cmd+Alt+S` | ○ | ○ | |
 | マーカー作成 | `Shift+L` / `Alt+L` | ○ | ○ | |
 | トラック / クリップ複製 | `Cmd+B` | ○ | ○ | |
-| ウィンドウ管理 | `Ctrl+W` / `Ctrl+Shift+W` | ○ | ○ | |
+| ウィンドウ管理 | `Cmd+W` / `Cmd+Alt+W` | ○ | ○ | |
 | Absolute Replace | `Ctrl+Alt+D` / `Ctrl+Alt+V` | ○ | ○ | |
 | 中クリックエミュレーション | `Alt+Click` | ○ | ○ | |
 | エンベロープモード切替 | `Alt` | ○ | ○ | |

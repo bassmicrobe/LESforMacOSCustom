@@ -15,7 +15,7 @@ function op_clean() {
     ${RM} -rf "${BUILD_HOME}"
 
     echo "Cleaning temporary build folders..."
-    xcodebuild -workspace Hammerspoon.xcworkspace -scheme "${XCODE_SCHEME}" -configuration "${XCODE_CONFIGURATION}" -destination "platform=macOS" clean | xcbeautify ${XCB_OPTS[@]:-}
+    xcodebuild -workspace Hammerspoon.xcworkspace -scheme "${XCODE_SCHEME}" -configuration "${XCODE_CONFIGURATION}" -destination "platform=macOS" clean | xcbeautify "${XCB_OPTS[@]}"
 }
 
 function op_build() {
@@ -32,8 +32,12 @@ function op_build() {
     ${RM} -rf "${HAMMERSPOON_BUNDLE_PATH}"
 
     local BUILD_COMMAND="archive"
+    local XCODE_CONFIG_ARGS=()
     if [ "${BUILD_FOR_TESTING}" == "1" ]; then
         BUILD_COMMAND="build-for-testing"
+    fi
+    if [ -n "${XCCONFIG_FILE}" ]; then
+        XCODE_CONFIG_ARGS=(-xcconfig "${XCCONFIG_FILE}")
     fi
 
     # Build the app
@@ -43,7 +47,8 @@ function op_build() {
                -configuration "${XCODE_CONFIGURATION}" \
                -destination "platform=macOS" \
                -archivePath "${HAMMERSPOON_XCARCHIVE_PATH}" \
-               "${BUILD_COMMAND}" | tee "${BUILD_HOME}/${XCODE_CONFIGURATION}-build.log" | xcbeautify ${XCB_OPTS[@]:-}
+               "${XCODE_CONFIG_ARGS[@]}" \
+               "${BUILD_COMMAND}" | tee "${BUILD_HOME}/${XCODE_CONFIGURATION}-build.log" | xcbeautify "${XCB_OPTS[@]}"
 
     if [ "${BUILD_COMMAND}" == "archive" ]; then
         # Export the app bundle from the archive
@@ -71,20 +76,24 @@ function op_test() {
 
     mkdir -p "${BUILD_HOME}/reports"
 
-    # We have to allow things to fail, because test runs may fail and we want the output
+    local XCODE_CONFIG_ARGS=()
+    if [ -n "${XCCONFIG_FILE}" ]; then
+        XCODE_CONFIG_ARGS=(-xcconfig "${XCCONFIG_FILE}")
+    fi
+
+    # Preserve logs and formatted output, then propagate xcodebuild's real exit.
     set +e
-    set +o pipefail
-#xcodebuild -workspace Hammerspoon.xcworkspace -scheme Release test-without-building
 
     xcodebuild -workspace Hammerspoon.xcworkspace \
                -scheme "${XCODE_SCHEME}" \
                -configuration "${XCODE_CONFIGURATION}" \
                -resultBundlePath "${BUILD_HOME}/TestResults" \
-               test-without-building 2>&1 | tee "${BUILD_HOME}/test.log" | xcbeautify ${XCB_OPTS[@]:-}
+               "${XCODE_CONFIG_ARGS[@]}" \
+               test-without-building 2>&1 | tee "${BUILD_HOME}/test.log" | xcbeautify "${XCB_OPTS[@]}"
+    local TEST_STATUS=${PIPESTATUS[0]}
 
-    # Re-enable error capture
     set -e
-    set -o pipefail
+    return "${TEST_STATUS}"
 }
 
 function op_validate() {
@@ -158,7 +167,7 @@ function op_docs() {
     pushd "${HAMMERSPOON_HOME}" >/dev/null || fail "Unable to access Hammerspoon repo at ${HAMMERSPOON_HOME}"
 
     if [ "${DOCS_LINT_ONLY}" == 1 ]; then
-        "${DOCSCRIPT}" -l ${DOCS_SEARCH_DIRS[*]} || fail "Docs lint failed"
+        "${DOCSCRIPT}" -l "${DOCS_SEARCH_DIRS[@]}" || fail "Docs lint failed"
         echo "Docs lint OK"
         popd >/dev/null || fail "Unknown"
         return # We return here because this option cannot be used with any of the subsequent ones
@@ -166,22 +175,22 @@ function op_docs() {
 
     if [ "${DOCS_JSON}" == 1 ]; then
         echo "Building docs JSON..."
-        "${DOCSCRIPT}" -o "${BUILD_HOME}" --json ${DOCS_SEARCH_DIRS[@]}
+        "${DOCSCRIPT}" -o "${BUILD_HOME}" --json "${DOCS_SEARCH_DIRS[@]}"
     fi
 
     if [ "${DOCS_MD}" == 1 ]; then
         echo "Building docs Markdown..."
-        "${DOCSCRIPT}" -o "${BUILD_HOME}" --markdown ${DOCS_SEARCH_DIRS[@]}
+        "${DOCSCRIPT}" -o "${BUILD_HOME}" --markdown "${DOCS_SEARCH_DIRS[@]}"
     fi
 
     if [ "${DOCS_HTML}" == 1 ]; then
         echo "Building docs HTML..."
-        "${DOCSCRIPT}" -o "${BUILD_HOME}" --html ${DOCS_SEARCH_DIRS[@]}
+        "${DOCSCRIPT}" -o "${BUILD_HOME}" --html "${DOCS_SEARCH_DIRS[@]}"
     fi
 
     if [ "${DOCS_SQL}" == 1 ]; then
         echo "Building docs SQLite..."
-        "${DOCSCRIPT}" -o "${BUILD_HOME}" --sql ${DOCS_SEARCH_DIRS[@]}
+        "${DOCSCRIPT}" -o "${BUILD_HOME}" --sql "${DOCS_SEARCH_DIRS[@]}"
     fi
 
     if [ "${DOCS_DASH}" == 1 ]; then
@@ -214,7 +223,7 @@ function op_installdeps() {
     brew install coreutils jq xcbeautify gawk cocoapods gh || fail "Unable to install Homebrew dependencies"
 
     echo "  Python packages..."
-    /usr/bin/pip3 install --user --disable-pip-version-check -r "${HAMMERSPOON_HOME}/requirements.txt" || fail "Unable to install Python dependencies"
+    python3 -m pip install --user --disable-pip-version-check --require-hashes -r "${HAMMERSPOON_HOME}/requirements.txt" || fail "Unable to install Python dependencies"
 
     if [ "${INSTALLDEPS_FULL}" == "1" ]; then
         echo "  Ruby packages..."
@@ -256,6 +265,8 @@ function op_keychain_prep() {
     fi
 
     if [ "${NOTARIZATION_CREDS_FILE}" != "" ]; then
+        # The caller explicitly supplies this credentials file.
+        # shellcheck disable=SC1090
         source "${NOTARIZATION_CREDS_FILE}"
 
         local SIGN_TEAM ; SIGN_TEAM=$(xcodebuild -workspace Hammerspoon.xcworkspace -scheme Release -configuration Release -showBuildSettings 2>&1 | grep -E " DEVELOPMENT_TEAM" | sed -e 's/.* = //')
@@ -385,8 +396,8 @@ function op_release() {
     popd >/dev/null || fail "Unknown"
 
     echo " Updating appcast.xml..."
-    eval $(stat -s "${ZIP_PATH}")
-    export ZIPLEN="${st_size}"
+    ZIPLEN=$(stat -f %z "${ZIP_PATH}")
+    export ZIPLEN
     pushd "${HAMMERSPOON_HOME}/" >/dev/null || fail "Unable to access ${HAMMERSPOON_HOME}/"
     local BUILD_NUMBER ; BUILD_NUMBER=$(git rev-list "$(git symbolic-ref HEAD | sed -e 's,.*/\\(.*\\),\\1,')" --count)
     local NEWCHUNK ; NEWCHUNK="<!-- __UPDATE_MARKER__ -->
@@ -430,7 +441,8 @@ function op_release() {
  
     if [ "${TWITTER_ACCOUNT}" != "" ]; then
         echo " Tweeting release..."
-        local T_PATH=$(/usr/bin/gem contents t 2>/dev/null | grep "\/t$")
+        local T_PATH
+        T_PATH=$(/usr/bin/gem contents t 2>/dev/null | grep "\/t$")
         local CURRENT_T_ACCOUNT ; CURRENT_T_ACCOUNT=$("${T_PATH}" accounts | grep -B1 active | head -1)
         "${T_PATH}" set active "${TWITTER_ACCOUNT}"
         "${T_PATH}" update "Just released ${VERSION} - https://www.hammerspoon.org/releasenotes/"
@@ -476,7 +488,7 @@ function op_build_assert() {
     assert_xcbeautify
     assert_cocoapods_state
 
-    if [ "${XCODE_CONFIGURATION}" == "Release" ]; then
+    if [ "${UPLOAD_DSYM}" == "1" ]; then
         if [ ! -f "${SENTRY_TOKEN_API_FILE}" ]; then
             fail "Release build requested, but no Sentry API token exists at: ${SENTRY_TOKEN_API_FILE}"
         fi
@@ -623,13 +635,35 @@ function assert_xcbeautify() {
 }
 
 function assert_docs_requirements() {
-    # FIXME: This is overly broad - if all that's happening is linting or JSON generation, these requirements are not required
   echo "Checking Python requirements.txt is satisfied..."
-  echo "import sys
-import pkg_resources
-from pkg_resources import DistributionNotFound, VersionConflict
-dependencies = open('${HAMMERSPOON_HOME}/requirements.txt', 'r').readlines()
-pkg_resources.require(dependencies)" | /usr/bin/python3
+  python3 - "${HAMMERSPOON_HOME}/requirements.txt" <<'PY' || fail "Python documentation dependencies are not installed at locked versions"
+import importlib.metadata
+import re
+import sys
+
+requirements_path = sys.argv[1]
+locked = []
+with open(requirements_path, encoding="utf-8") as requirements_file:
+    for raw_line in requirements_file:
+        match = re.match(r"^([A-Za-z0-9_.-]+)==([^\\\s]+)", raw_line.strip())
+        if match:
+            locked.append(match.groups())
+
+if not locked:
+    raise SystemExit("No locked Python dependencies were found")
+
+mismatches = []
+for package_name, expected_version in locked:
+    try:
+        actual_version = importlib.metadata.version(package_name)
+    except importlib.metadata.PackageNotFoundError:
+        actual_version = "not installed"
+    if actual_version != expected_version:
+        mismatches.append(f"{package_name}: expected {expected_version}, found {actual_version}")
+
+if mismatches:
+    raise SystemExit("\n".join(mismatches))
+PY
 }
 
 function assert_cocoapods_state() {

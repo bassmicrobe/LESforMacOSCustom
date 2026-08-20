@@ -1,0 +1,5 @@
+# Direct dependencies for scripts/docs/bin/build_docs.py.
+# Keep security floors explicit; requirements.txt is the generated hash-locked file.
+jinja2 >= 3.1.6, < 4
+mistune >= 3.3.0, < 4
+pygments >= 2.20.0, < 3

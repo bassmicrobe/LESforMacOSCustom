@@ -54,7 +54,7 @@ function getMenuBar(debugEnabled, strictEnabled)
   }, {
     debug = false,
     state = nil,
-    title = "トラックメモ",
+    title = L("menu_track_notes"),
     fn = function()
       openTrackNotes()
     end
@@ -190,11 +190,11 @@ function getMenuBar(debugEnabled, strictEnabled)
   }}
 
   -- Set default arguments
-  local debugEnabled = debugEnabled or false
-  local strictEnabled = strictEnabled or false
+  local isDebugEnabled = debugEnabled or false
+  local isStrictEnabled = strictEnabled or false
 
   -- Set "Strict Time" toggle state by menu title (avoids brittle numeric indices when items are added/removed)
-  if strictEnabled == true then
+  if isStrictEnabled == true then
     local strictTitle = L("menu_strict_time")
     for idx = 1, #rawBar do
       if rawBar[idx].title == strictTitle then
@@ -213,7 +213,7 @@ function getMenuBar(debugEnabled, strictEnabled)
       title = v.title,
       fn = v.fn
     }
-    if v.debug == true and debugEnabled == false then
+    if v.debug == true and isDebugEnabled == false then
       goto menus_bar_getmenu_continue
     else
       table.insert(ret, entry)

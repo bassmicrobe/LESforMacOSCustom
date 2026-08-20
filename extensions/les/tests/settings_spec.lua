@@ -50,6 +50,11 @@ rawset(_G, "ShellCreateEmptyFile", function(path) local f = io.open(path, "w"); 
 rawset(_G, "HSMakeQuery", function() return false end)
 rawset(_G, "HSMakeAlert", function() end)
 
+local secureFileCalls = 0
+local secureDirCalls = 0
+rawset(_G, "SetSecureFileMode", function() secureFileCalls = secureFileCalls + 1 end)
+rawset(_G, "SetSecureDirMode", function() secureDirCalls = secureDirCalls + 1 end)
+
 -- panicExit must be observable: record the message instead of killing busted
 local panicMessage = nil
 rawset(_G, "panicExit", function(message)
@@ -85,6 +90,16 @@ describe("settingsManager", function()
             assert.are.equal(0.3, settingsManager:getVal("loadspeed"))
             assert.are.equal("`", settingsManager:getVal("pianorollmacro"))
             assert.are.equal("gpt-4o-mini", settingsManager:getVal("openaimodel"))
+        end)
+
+        it("re-applies restrictive permissions to an existing valid settings file", function()
+            secureFileCalls = 0
+            secureDirCalls = 0
+
+            simulateRestart()
+
+            assert.is_true(secureFileCalls > 0)
+            assert.is_true(secureDirCalls > 0)
         end)
     end)
 

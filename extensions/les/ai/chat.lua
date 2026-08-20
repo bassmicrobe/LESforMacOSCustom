@@ -2,6 +2,8 @@
 --  AI Chat Assistant — floating webview for music production Q&A
 
 local openai = require("ai.openai")
+local windowframe = require("util.windowframe")
+local utf8text = require("util.utf8text")
 
 local chat = {}
 
@@ -9,15 +11,11 @@ local chat = {}
 local _webview = nil
 ---@type hs.webview.usercontent|nil
 local _uc = nil
+local _requestGeneration = 0
+local MAX_INPUT_LENGTH = 8000
 
 -- Conversation history (reset on window close)
 local _messages = {}
-
-local SYSTEM_PROMPT = [[あなたは Ableton Live に特化した音楽制作アシスタントです。
-ユーザーは Ableton Live + Live Enhancement Suite Custom (Hammerspoon ベースの拡張ツール) を使用しています。
-質問には日本語で簡潔に回答してください。
-ミキシング、サウンドデザイン、プラグイン選び、コード進行、作曲テクニックなどの質問に対応します。
-回答は Markdown 形式で構いません。コードブロックは ```で囲んでください。]]
 
 --- Escape for safe JS string embedding (single-quoted).
 ---@param s string
@@ -33,14 +31,26 @@ local function jsEscape(s)
             :gsub("\u{2029}", "\\u2029")
 end
 
+local function htmlEscape(s)
+    return tostring(s or ""):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
+end
+
+local function replaceTokens(template, values)
+    return (template:gsub("__([A-Z0-9_]+)__", function(key)
+        return values[key] or ""
+    end))
+end
+
 --- Build the chat HTML.
 ---@return string
 local function buildHTML()
-    return [[<!DOCTYPE html><html><head><meta charset="utf-8">
+    local template = [[<!DOCTYPE html><html lang="__LANG__"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; overflow: hidden; }
 body {
+    color-scheme: dark;
     background: #1c1c1e; color: #e5e5ea;
     font-family: -apple-system, "Helvetica Neue", sans-serif;
     font-size: 13px; display: flex; flex-direction: column;
@@ -56,6 +66,7 @@ body {
     border-radius: 6px; padding: 3px 10px; font-size: 11px; cursor: pointer;
 }
 .header button:hover { border-color: #636366; color: #c7c7cc; }
+.header button:disabled { opacity: 0.45; cursor: default; }
 .messages {
     flex: 1; overflow-y: auto; padding: 12px 16px;
     display: flex; flex-direction: column; gap: 10px;
@@ -73,7 +84,7 @@ body {
 .msg li { margin: 2px 0; }
 .msg p { margin: 4px 0; } .msg p:first-child { margin-top: 0; } .msg p:last-child { margin-bottom: 0; }
 .msg hr { border: none; border-top: 1px solid rgba(255,255,255,0.2); margin: 8px 0; }
-.typing { align-self: flex-start; color: #636366; font-style: italic; padding: 4px 0; }
+.typing { align-self: flex-start; color: #a1a1a6; font-style: italic; padding: 4px 0; }
 .input-area {
     padding: 10px 16px 14px; border-top: 1px solid #2c2c2e;
     flex-shrink: 0; display: flex; gap: 8px; align-items: flex-end;
@@ -86,7 +97,7 @@ textarea {
     outline: none; line-height: 1.45;
 }
 textarea:focus { border-color: #0a84ff; }
-textarea::placeholder { color: #48484a; }
+textarea::placeholder { color: #8e8e93; }
 textarea:disabled { opacity: 0.5; }
 button.send {
     background: #0a84ff; color: #fff; border: none; border-radius: 8px;
@@ -95,19 +106,23 @@ button.send {
 }
 button.send:hover { background: #409cff; }
 button.send:disabled { opacity: 0.4; cursor: default; }
-.welcome { color: #636366; text-align: center; margin-top: 40px; line-height: 1.8; }
+.welcome { color: #a1a1a6; text-align: center; margin-top: 40px; line-height: 1.8; }
+button:focus-visible, textarea:focus-visible {
+    outline: 2px solid #64b5ff;
+    outline-offset: 2px;
+}
 </style></head><body>
 <div class="header">
-  <h1>🤖 AI アシスタント</h1>
-  <button onclick="clearChat()">会話クリア</button>
+  <h1>🤖 __TITLE__</h1>
+  <button type="button" id="clearBtn" onclick="clearChat()">__CLEAR__</button>
 </div>
-<div class="messages" id="messages">
-  <div class="welcome">Ableton Live の音楽制作について<br>何でも質問してください。</div>
+<div class="messages" id="messages" role="log" aria-live="polite" aria-relevant="additions">
+  <div class="welcome">__WELCOME_LINE1_HTML__<br>__WELCOME_LINE2_HTML__</div>
 </div>
 <div class="input-area">
-  <textarea id="inp" placeholder="質問を入力... (Cmd+Enter で送信)" rows="1"
+  <textarea id="inp" aria-label="__INPUT_LABEL__" maxlength="__MAX_INPUT_CODE_UNITS__" placeholder="__INPUT_PLACEHOLDER__" rows="1"
     oninput="resizeTA(this)" onkeydown="onKey(event)"></textarea>
-  <button class="send" id="sendBtn" onclick="send()">送信</button>
+  <button type="button" class="send" id="sendBtn" onclick="send()">__SEND__</button>
 </div>
 <script>
 function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -140,6 +155,8 @@ function mdToHtml(md){
     return out.replace(/\x01(\d+)\x01/g,function(_,i){return stash[+i];});
 }
 var sending = false;
+var maxInputLength = __MAX_INPUT_LENGTH__;
+function charLength(value) { return Array.from(value).length; }
 function resizeTA(el) {
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 110) + 'px';
@@ -152,6 +169,11 @@ function send() {
     var inp = document.getElementById('inp');
     var text = inp.value.trim();
     if (!text) return;
+    if (charLength(text) > maxInputLength) {
+        addMessage('error', '__INPUT_TOO_LONG_JS__');
+        inp.focus();
+        return;
+    }
     sending = true;
     inp.value = ''; inp.style.height = 'auto';
     inp.disabled = true;
@@ -172,8 +194,8 @@ function addMessage(role, text) {
 function showTyping() {
     removeTyping();
     var el = document.createElement('div');
-    el.className = 'typing'; el.id = 'typing';
-    el.textContent = '考え中...';
+    el.className = 'typing'; el.id = 'typing'; el.setAttribute('role', 'status');
+    el.textContent = '__THINKING_JS__';
     document.getElementById('messages').appendChild(el);
     scrollBottom();
 }
@@ -188,9 +210,17 @@ function onReply() {
     document.getElementById('sendBtn').disabled = false;
     inp.focus();
 }
+function cancelPending() {
+    sending = false;
+    removeTyping();
+    var inp = document.getElementById('inp');
+    inp.disabled = false;
+    document.getElementById('sendBtn').disabled = false;
+}
 function clearChat() {
+    cancelPending();
     document.getElementById('messages').innerHTML =
-        '<div class="welcome">Ableton Live の音楽制作について<br>何でも質問してください。</div>';
+        '<div class="welcome">__WELCOME_LINE1_JS__<br>__WELCOME_LINE2_JS__</div>';
     window.webkit.messageHandlers.aichat.postMessage(JSON.stringify({action:'clear'}));
 }
 function scrollBottom() {
@@ -200,22 +230,38 @@ function scrollBottom() {
 document.getElementById('inp').focus();
 </script>
 </body></html>]]
+    return replaceTokens(template, {
+        LANG = htmlEscape(L("locale_code")),
+        TITLE = htmlEscape(L("chat_title")),
+        CLEAR = htmlEscape(L("chat_clear")),
+        WELCOME_LINE1_HTML = htmlEscape(L("chat_welcome_line1")),
+        WELCOME_LINE2_HTML = htmlEscape(L("chat_welcome_line2")),
+        WELCOME_LINE1_JS = jsEscape(htmlEscape(L("chat_welcome_line1"))),
+        WELCOME_LINE2_JS = jsEscape(htmlEscape(L("chat_welcome_line2"))),
+        INPUT_LABEL = htmlEscape(L("chat_input_label")),
+        INPUT_PLACEHOLDER = htmlEscape(L("chat_input_placeholder")),
+        INPUT_TOO_LONG_JS = jsEscape(L("chat_input_too_long")),
+        MAX_INPUT_LENGTH = tostring(MAX_INPUT_LENGTH),
+        MAX_INPUT_CODE_UNITS = tostring(MAX_INPUT_LENGTH * 2),
+        SEND = htmlEscape(L("chat_send")),
+        THINKING_JS = jsEscape(L("chat_thinking")),
+    })
 end
 
 --- Build the system prompt, optionally enriched with project context.
 ---@return table
 local function buildSystemMessages()
-    local sys = SYSTEM_PROMPT
+    local sys = L("chat_system_prompt")
     -- Add current project context if available
     if _G.trackname and _G.trackname ~= "" then
-        sys = sys .. "\n\n現在のプロジェクト: " .. _G.trackname
+        sys = sys .. "\n\n" .. string.format(L("chat_context_project"), _G.trackname)
         -- _G.clock is an hs.timer userdata (arithmetic throws); read the real
         -- per-track elapsed-seconds counter instead.
         local secs = tonumber(_G["timer_" .. _G.trackname])
         if secs then
             local h = math.floor(secs / 3600)
             local m = math.floor((secs % 3600) / 60)
-            sys = sys .. string.format("\nセッション時間: %d時間%d分", h, m)
+            sys = sys .. "\n" .. string.format(L("chat_context_session"), h, m)
         end
     end
     return {{ role = "system", content = sys }}
@@ -224,6 +270,20 @@ end
 --- Handle a user message: call OpenAI and push reply to webview.
 ---@param text string
 local function handleSend(text)
+    if type(text) ~= "string" then return end
+    text = text:match("^%s*(.-)%s*$") or ""
+    if text == "" or not utf8text.isWithinLimit(text, MAX_INPUT_LENGTH) then
+        if _webview then
+            local message = text == "" and L("chat_input_required") or L("chat_input_too_long")
+            _webview:evaluateJavaScript(string.format(
+                "removeTyping(); addMessage('error','%s'); onReply();", jsEscape(message)))
+        end
+        return
+    end
+
+    _requestGeneration = _requestGeneration + 1
+    local requestGeneration = _requestGeneration
+    local requestWebview = _webview
     _messages[#_messages + 1] = { role = "user", content = text }
 
     -- Cap retained history so each request doesn't grow without bound (rising
@@ -241,13 +301,13 @@ local function handleSend(text)
     end
 
     openai.chat(apiMessages, function(reply, err)
-        if not _webview then
-            print("[LES][ai.chat] reply dropped: webview already closed")
+        if _webview ~= requestWebview or _requestGeneration ~= requestGeneration then
+            print("[LES][ai.chat] stale reply dropped")
             return
         end
         if err or type(reply) ~= "string" or reply == "" then
-            local errMsg = err or "空の応答が返されました"
-            print("[LES][ai.chat] reply error: " .. tostring(errMsg))
+            local errMsg = err and L("ai_request_failed") or L("ai_empty_response")
+            print("[LES][ai.chat] reply error: " .. tostring(err or "empty response"))
             _webview:evaluateJavaScript(string.format(
                 "removeTyping(); addMessage('error','%s'); onReply();", jsEscape(errMsg)))
         else
@@ -261,12 +321,15 @@ end
 --- Toggle the AI chat assistant window.
 function chat.toggle()
     if _webview ~= nil then
-        _webview:delete()
+        _requestGeneration = _requestGeneration + 1
+        local closingWebview = _webview
         _webview = nil
         _uc = nil
+        closingWebview:delete()
         return
     end
 
+    _requestGeneration = _requestGeneration + 1
     _messages = {}
 
     _uc = hs.webview.usercontent.new("aichat")
@@ -283,27 +346,31 @@ function chat.toggle()
         if body.action == "send" and type(body.text) == "string" then
             handleSend(body.text)
         elseif body.action == "clear" then
+            _requestGeneration = _requestGeneration + 1
             _messages = {}
         end
     end)
 
     local screen = hs.screen.mainScreen():frame()
-    local W, H = 460, 580
-    local x = math.floor(screen.x + screen.w - W - 40)
-    local y = math.floor(screen.y + (screen.h - H) / 2)
+    local frame = windowframe.right(screen, 460, 580, 12,
+        math.max(12, math.floor((screen.h - 580) / 2)))
 
     _webview = hs.webview.new(
-        { x = x, y = y, w = W, h = H },
+        frame,
         { developerExtrasEnabled = false },
         _uc
     )
+    if _webview == nil then return end
+    local currentWebview = _webview
+    _webview:deleteOnClose(true)
     _webview:windowStyle({ "titled", "closable", "resizable", "nonactivating" })
-    _webview:windowTitle("AI アシスタント")
+    _webview:windowTitle(L("chat_title"))
     _webview:level(hs.drawing.windowLevels.floating)
     _webview:allowTextEntry(true)
     _webview:html(buildHTML())
     _webview:windowCallback(function(action)
-        if action == "closing" then
+        if action == "closing" and _webview == currentWebview then
+            _requestGeneration = _requestGeneration + 1
             _webview = nil
             _uc = nil
         end

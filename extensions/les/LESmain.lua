@@ -12,23 +12,30 @@
 -- pretending the routines we defined don't exist.
 
 require("util.locale")
+local migration = require("util.migration")
 
 -- CODE START
-function launchBashScript(script)
-  local handle = io.popen(
-    [[/bin/bash -c ']] .. script .. [[']]
-  )
-  local retcode = {handle:close()}
-  return tonumber(retcode[3])
+local homePath = os.getenv("HOME") or ""
+local userInitPath = homePath .. "/.les/init.lua"
+local bundledInitPath = hs.processInfo["bundlePath"] .. "/Contents/Resources/extensions/hs/les/jumpstart.lua"
+
+local function setOwnerOnly(path)
+  local task = hs.task.new("/bin/chmod", nil, {"600", path})
+  if not task or not task:start() then return false end
+  while task:isRunning() do hs.timer.usleep(1000) end
+  return task:terminationStatus() == 0
 end
 
-function shouldMigrate()
-  local fileHdl = io.open(os.getenv("HOME") .. "/.les/init.lua", "r")
+local function shouldMigrate()
+  local fileHdl = io.open(userInitPath, "r")
   if fileHdl ~= nil then
       fileHdl:close()
-      return launchBashScript(
-        [[cmp "${HOME}/.les/init.lua" "]] .. hs.processInfo["bundlePath"] .. [[/Contents/Resources/extensions/hs/les/jumpstart.lua"]]
-      ) > 0
+      local differs, comparisonError = migration.filesDiffer(userInitPath, bundledInitPath)
+      if differs == nil then
+        print("Unable to compare startup files: " .. tostring(comparisonError))
+        return false
+      end
+      return differs
   else
       return false
   end
@@ -44,20 +51,14 @@ if shouldMigrate() == true then
   ) == L("btn_yes")
   then
     -- User has accepted repair
-    if launchBashScript(
-[[
-#!/usr/bin/env bash
-set -eux
-mv "${HOME}/.les/init.lua" "${HOME}/.les/init.lua.bak";
-cp "]] .. hs.processInfo["bundlePath"] .. [[/Contents/Resources/extensions/hs/les/jumpstart.lua" "${HOME}/.les/init.lua";
-exit 0;
-]]
-    ) == 0 then
+    local repaired, repairError = migration.repair(userInitPath, bundledInitPath, setOwnerOnly)
+    if repaired then
       -- Repair has succeeded
       hs.dialog.blockAlert("Live Enhancement Suite", L("jumpstart_success"), L("btn_ok"), "")
       os.exit()
     else
       -- Repair has failed
+      print("Startup repair failed: " .. tostring(repairError))
       hs.dialog.blockAlert("Live Enhancement Suite", L("jumpstart_failure"), L("btn_ok"), "")
       os.exit()
     end
@@ -71,9 +72,6 @@ exit 0;
   end
 end
 
--- Un-define functions and free up variables
-launchBashScript = nil
-shouldMigrate = nil
 -- CODE END
 
 ---------------------------------

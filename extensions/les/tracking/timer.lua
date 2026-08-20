@@ -11,15 +11,47 @@
 ------------------------------
 
 local notifs = require("tracking.notifications")
+local storageKey = require("util.storagekey")
 
 local AUTOSAVE_INTERVAL = 60 -- seconds between periodic disk flushes
 local lastAutosave = 0
 
+local function timerFilePath(name)
+    return GetDataPath("resources/time/" .. storageKey.forProject(name) .. "_time.txt")
+end
+
+local function legacyTimerFilePath(name)
+    local legacyName = (name or "unsaved_project"):gsub("[%p%c%s]", "_")
+    return GetDataPath("resources/time/" .. legacyName .. "_time.txt")
+end
+
 local function saveTimerToDisk(name)
     local val = tonumber(_G["timer_" .. name]) or 0
     ShellCreateDirectory(strJoinPaths(ScriptUserResourcesPath, "time"))
-    local filepath = GetDataPath([[resources/time/]] .. name .. "_time.txt")
-    ShellOverwriteFile(val, filepath)
+    ShellOverwriteFile(val, timerFilePath(name))
+end
+
+local function loadTimerFromDisk(name)
+    local file = io.open(timerFilePath(name), "r")
+    if not file then file = io.open(legacyTimerFilePath(name), "r") end
+    if not file then
+        _G["timer_" .. name] = 0
+        return false
+    end
+
+    local firstLine = file:read("*l")
+    file:close()
+    _G["timer_" .. name] = tonumber(firstLine) or 0
+    return true
+end
+
+local function projectNameFromWindowTitle(title)
+    if type(title) ~= "string" then return "unsaved_project" end
+    local projectName = title:match(".*%[([^%]]+)%]")
+    if not projectName then return "unsaved_project" end
+    projectName = projectName:match("^%s*(.-)%s*$")
+    if projectName == "" then return "unsaved_project" end
+    return projectName
 end
 
 function setstricttime() -- this function manages the check box in the menu
@@ -41,50 +73,34 @@ function setstricttime() -- this function manages the check box in the menu
 end
 
 function coolfunc(_hswindow, _appname, _straw) -- function that handles saving and loading of project times in ~/.les/resources/time/
-
-    if trackname ~= nil then -- saving old time
-        local oldtrackname = trackname
-        print(_G["timer_" .. oldtrackname])
-        saveTimerToDisk(oldtrackname)
-        _G["timer_" .. oldtrackname] = nil
-    end
-
     local appname = getLiveHsAppObj() -- getting new track title
+    local nextTrackName = nil
     if appname and appname:mainWindow() then
         local mainwindowname = appname:mainWindow():title()
         -- Export / render detection: notify before updating trackname
         notifs.checkExport(mainwindowname)
-        if string.find(mainwindowname, "%[") ~= nil and string.find(mainwindowname, "%]") ~= nil then
-            trackname = (mainwindowname:gsub(".*(.*)%[", ""))
-            trackname = (trackname:gsub("%].*(.*)", ""))
-            trackname = trackname:gsub("[%p%c%s]", "_")
-            print("trackname = " .. trackname)
-        else
-            trackname = "unsaved_project"
-        end
-        -- Reset hourly counter for the newly active project
-        notifs.onProjectChange(trackname)
-    else
-        trackname = nil
-        notifs.onProjectChange(nil)
-        return
+        nextTrackName = projectNameFromWindowTitle(mainwindowname)
     end
 
-    local filepath = GetDataPath([[resources/time/]] .. trackname .. "_time" .. [[.txt]]) -- loading old time (if it exists)
-    local f = io.open(filepath, "r")
-    if f ~= nil then
-        print("timer file found")
-        for line in f:lines() do
-            print("old timer found for this project: " .. line)
-            -- A non-numeric line (e.g. a corrupted file) would crash the
-            -- per-second arithmetic in timerfunc, so coerce defensively
-            _G["timer_" .. trackname] = tonumber(line) or 0
+    if nextTrackName == trackname then
+        if nextTrackName and _G["timer_" .. nextTrackName] == nil then
+            loadTimerFromDisk(nextTrackName)
         end
-        f:close()
-        return true
-    else
-        return
+        return nextTrackName ~= nil
     end
+
+    if trackname ~= nil then
+        local oldTrackName = trackname
+        saveTimerToDisk(oldTrackName)
+        _G["timer_" .. oldTrackName] = nil
+    end
+
+    trackname = nextTrackName
+    notifs.onProjectChange(trackname)
+    if not trackname then return false end
+
+    loadTimerFromDisk(trackname)
+    return true
 end
 windowfilter = hs.window.filter.new({'Live'}, nil) -- activating the window filter
 windowfilter:subscribe(hs.window.filter.windowTitleChanged, coolfunc) -- if the title of the active window changes, execute this function again.

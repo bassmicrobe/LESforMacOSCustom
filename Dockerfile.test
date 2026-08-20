@@ -15,7 +15,7 @@
 #    docker run --rm -it les-test /bin/sh
 ###############################################
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 
 # -------------------------------------------
 #  システムパッケージ
@@ -33,38 +33,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # -------------------------------------------
-#  Node.js (LTS) + pnpm
-#  lint / フォーマッタ等の JS ツールチェーン用
-# -------------------------------------------
-ENV NODE_VERSION=22
-RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/* \
-    && corepack enable \
-    && corepack prepare pnpm@latest --activate
-
-# -------------------------------------------
 #  Lua テスト・静的解析ツール
 # -------------------------------------------
 # IMPORTANT: pin to Lua 5.4 — Debian's luarocks defaults to Lua 5.1,
 # which cannot even parse production code using goto (Lua 5.2+)
-RUN luarocks-5.4 install busted \
-    && luarocks-5.4 install luacheck
+RUN luarocks-5.4 install busted 2.3.0-1 \
+    && luarocks-5.4 install luacheck 1.2.0-1
 
 # -------------------------------------------
 #  アプリケーションコード
 # -------------------------------------------
 WORKDIR /app
 
-# package.json があれば pnpm install を実行（なくても COPY エラーにならないよう .luacheckrc をフォールバック）
-COPY .luacheckrc package.json* pnpm-lock.yaml* ./
-RUN if [ -f package.json ]; then pnpm install --frozen-lockfile 2>/dev/null || pnpm install; fi
-
 # Lua ソースとテスト
 COPY .luacheckrc ./
+COPY extensions/_coresetup/_coresetup.lua ./extensions/_coresetup/_coresetup.lua
 COPY extensions/les/ ./extensions/les/
+COPY scripts/run-lua-tests.sh /usr/local/bin/run-lua-tests
+RUN chmod 755 /usr/local/bin/run-lua-tests
 
 # -------------------------------------------
 #  デフォルト: 全テスト実行
 # -------------------------------------------
-CMD ["sh", "-c", "echo '=== luacheck ===' && luacheck extensions/les/ --no-color 2>&1; echo '' && echo '=== busted ===' && busted extensions/les/tests/"]
+CMD ["run-lua-tests"]

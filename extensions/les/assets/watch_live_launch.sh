@@ -10,7 +10,9 @@ set -euo pipefail
 
 LIVE_PROCESS_NAME="Live"
 LES_BUNDLE_ID="org.les.Live-Enhancement-Suite-Custom"
-POLL_INTERVAL=3
+# The watcher is opt-in. Ten seconds keeps launch reasonably prompt while
+# reducing pgrep process churn from 20 to 6 checks per minute while idle.
+POLL_INTERVAL=10
 
 is_live_running() {
     pgrep -xq "$LIVE_PROCESS_NAME"

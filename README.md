@@ -35,7 +35,7 @@ LESforMacOS Custom は Live Enhancement Suite Custom の macOS 版です。[Hamm
 | MIDIクリップ作成 | 新規MIDIクリップを素早く作成 | `Cmd+Shift+M` |
 | プロジェクトバージョニング | 新バージョンとして保存 | `Cmd+Alt+S` |
 | マーカー作成 | ロケーターマーカーを作成 | `Shift+L` |
-| ウィンドウ管理 | ウィンドウの閉じる・切替操作 | `Ctrl+W` |
+| ウィンドウ管理 | 前面または全プラグインウィンドウを閉じる | `Cmd+W` / `Cmd+Alt+W` |
 | カスタムメニュー | メニューバーからの操作 | メニューバーアイコン |
 | プラグイン検索 | Spotlight 風プラグイン検索 + お気に入り | `Cmd+Shift+H` |
 | プラグインメニュー設定 | カテゴリ別のプラグインメニューを GUI で編集 | メニューバー |
@@ -124,7 +124,7 @@ cd LESforMacOSCustom
 pod install
 
 # Python 依存関係のインストール
-pip3 install --user -r requirements.txt
+python3 -m pip install --user --require-hashes -r requirements.txt
 ```
 
 ### 3. ビルドと配布
@@ -138,8 +138,8 @@ pip3 install --user -r requirements.txt
   │
   └─ [配布用] リリースビルド → .app → DMG に梱包 → .dmg をユーザーに配布
                                   │                      │
-                                  └─ (任意) Apple 公証    └─ ユーザーが開いて
-                                     Gatekeeper 対応        /Applications にドラッグ
+                                  └─ Developer ID 署名・Apple 公証（配布時必須）
+                                     Gatekeeper 検証後にのみ公開
 ```
 
 #### デバッグビルド（開発用）
@@ -147,7 +147,7 @@ pip3 install --user -r requirements.txt
 コンパイルして `.app` を生成し、動作確認に使います：
 
 ```bash
-XCODE_ARGS="GCC_TREAT_WARNINGS_AS_ERRORS=NO MACOSX_DEPLOYMENT_TARGET=11.0"
+XCODE_ARGS="GCC_TREAT_WARNINGS_AS_ERRORS=NO MACOSX_DEPLOYMENT_TARGET=12.0"
 xcodebuild -workspace Hammerspoon.xcworkspace -scheme Hammerspoon \
   -configuration Debug ${XCODE_ARGS} clean build | xcbeautify
 ```
@@ -176,23 +176,20 @@ xcodebuild -workspace Hammerspoon.xcworkspace -scheme Hammerspoon \
 ./scripts/build.sh build -s Release -c Release
 ./scripts/build.sh validate
 
-# ② DMG に梱包（.app をインストーラーに変換）
-npm install -g create-dmg    # 初回のみ
-
+# ② DMG に梱包（署名・公証済み .app をインストーラーに変換）
 mkdir -p release
 cp -R ~/Library/Developer/Xcode/DerivedData/*/Build/Products/Release/*.app/ \
   "./Live Enhancement Suite Custom.app/"
 
-create-dmg --dmg-title="Live Enhancement Suite Custom" \
-  "Live Enhancement Suite Custom.app" release/
-
-mv release/*.dmg release/LiveEnhancementSuite.dmg
+hdiutil create -volname "Live Enhancement Suite Custom" \
+  -srcfolder "Live Enhancement Suite Custom.app" \
+  -ov -format UDZO release/LiveEnhancementSuite.dmg
 shasum -a 256 release/LiveEnhancementSuite.dmg > release/LiveEnhancementSuite.dmg.sha256sum
 ```
 
 `release/LiveEnhancementSuite.dmg` が配布用インストーラーです。
 
-#### Apple 公証（任意）
+#### Apple 公証（公開配布時は必須）
 
 App Store 外で配布する場合、macOS Gatekeeper に「安全なアプリ」と認識させるため公証を行います：
 
@@ -209,7 +206,16 @@ xcrun notarytool store-credentials -v \
 
 #### GitHub Actions による自動リリース
 
-`v*` 形式のタグをプッシュすると、上記の全工程を GitHub Actions が自動実行します：
+`release` Environment に次の Secrets を設定してください：
+
+- `MACOS_CERTIFICATE_P12_BASE64`
+- `MACOS_CERTIFICATE_PASSWORD`
+- `MACOS_KEYCHAIN_PASSWORD`
+- `APPLE_TEAM_ID`
+- `APPLE_ID`
+- `APPLE_APP_PASSWORD`
+
+`v*` 形式のタグをプッシュすると、Developer ID 署名、公証、staple、Gatekeeper 検証、DMG 公証がすべて成功した場合に限り GitHub Actions が公開します。Secrets が未設定、または検証が失敗した場合は公開しません：
 
 ```bash
 git tag v1.0.0

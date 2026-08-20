@@ -17,23 +17,23 @@ local _hudCanvas = nil
 ---@type hs.timer|nil
 local _hudTimer  = nil
 
--- State definitions: icon (emoji), label text, background color, text color
+-- State definitions: icon, localized label key, background color, text color
 local HUD_DEFS = {
     active   = {
         icon = "●",
-        label = "LES アクティブ",
+        labelKey = "hud_active",
         bg   = {red = 0.188, green = 0.820, blue = 0.345, alpha = 0.92},
-        fg   = {red = 1.0,   green = 1.0,   blue = 1.0,   alpha = 1.0},
+        fg   = {red = 0.0,   green = 0.0,   blue = 0.0,   alpha = 1.0},
     },
     paused   = {
         icon = "⏸",
-        label = "LES 一時停止",
+        labelKey = "hud_paused",
         bg   = {red = 1.0,   green = 0.624, blue = 0.000, alpha = 0.92},
         fg   = {red = 0.0,   green = 0.0,   blue = 0.0,   alpha = 1.0},
     },
     inactive = {
         icon = "○",
-        label = "LES 非アクティブ",
+        labelKey = "hud_inactive",
         bg   = {red = 0.172, green = 0.172, blue = 0.180, alpha = 0.90},
         fg   = {red = 0.700, green = 0.700, blue = 0.700, alpha = 1.0},
     },
@@ -92,7 +92,7 @@ function showStatusHUD(state, ttl)
     -- Label text
     _hudCanvas[3] = {
         type          = "text",
-        text          = def.label,
+        text          = L(def.labelKey),
         textFont      = "-apple-system",
         textSize      = 13,
         textColor     = def.fg,
@@ -137,5 +137,12 @@ function updateMenuBarState(state)
     else
         -- Restore normal icon or text (shared with menus.plugin)
         applyLesMainMenubarAppearance(LESmenubar)
+    end
+
+    -- applyLesMainMenubarAppearance() sets its own generic tooltip, so apply
+    -- the localized state description last for VoiceOver in every state.
+    local definition = HUD_DEFS[state]
+    if definition ~= nil then
+        LESmenubar:setTooltip(L(definition.labelKey))
     end
 end
