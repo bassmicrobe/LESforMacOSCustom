@@ -9,9 +9,9 @@
 // Configuration settings file format documentation can be found at:
 // https://help.apple.com/xcode/#/dev745c5c974
 
-#include "../../Pods/Target Support Files/Pods-Hammerspoon/Pods-Hammerspoon.debug.xcconfig"
-#include "Hammerspoon-Base.xcconfig"
-#include? "Hammerspoon-Downstream.xcconfig"
-
+// This file is passed as a command-line override by CI. Keep it limited to
+// test-only settings: command-line xcconfigs apply to every target, so
+// including the app's base config here would rename every extension product
+// and make Xcode report duplicate outputs.
 GCC_INSTRUMENT_PROGRAM_FLOW_ARCS = YES
 GCC_GENERATE_TEST_COVERAGE_FILES = YES
