@@ -10,6 +10,14 @@ function fail() {
   exit 1
 }
 
+function xcbeautify_output() {
+    if ((${#XCB_OPTS[@]} > 0)); then
+        xcbeautify "${XCB_OPTS[@]}"
+    else
+        xcbeautify
+    fi
+}
+
 ############################# TOP LEVEL COMMANDS #############################
 
 function op_clean() {
@@ -17,7 +25,7 @@ function op_clean() {
     ${RM} -rf "${BUILD_HOME}"
 
     echo "Cleaning temporary build folders..."
-    xcodebuild -workspace Hammerspoon.xcworkspace -scheme "${XCODE_SCHEME}" -configuration "${XCODE_CONFIGURATION}" -destination "platform=macOS" clean | xcbeautify "${XCB_OPTS[@]}"
+    xcodebuild -workspace Hammerspoon.xcworkspace -scheme "${XCODE_SCHEME}" -configuration "${XCODE_CONFIGURATION}" -destination "platform=macOS" clean | xcbeautify_output
 }
 
 function op_build() {
@@ -50,7 +58,7 @@ function op_build() {
                -destination "platform=macOS" \
                -archivePath "${HAMMERSPOON_XCARCHIVE_PATH}" \
                "${XCODE_CONFIG_ARGS[@]}" \
-               "${BUILD_COMMAND}" | tee "${BUILD_HOME}/${XCODE_CONFIGURATION}-build.log" | xcbeautify "${XCB_OPTS[@]}"
+               "${BUILD_COMMAND}" | tee "${BUILD_HOME}/${XCODE_CONFIGURATION}-build.log" | xcbeautify_output
 
     if [ "${BUILD_COMMAND}" == "archive" ]; then
         # Export the app bundle from the archive
@@ -91,7 +99,7 @@ function op_test() {
                -configuration "${XCODE_CONFIGURATION}" \
                -resultBundlePath "${BUILD_HOME}/TestResults" \
                "${XCODE_CONFIG_ARGS[@]}" \
-               test-without-building 2>&1 | tee "${BUILD_HOME}/test.log" | xcbeautify "${XCB_OPTS[@]}"
+               test-without-building 2>&1 | tee "${BUILD_HOME}/test.log" | xcbeautify_output
     local TEST_STATUS=${PIPESTATUS[0]}
 
     set -e
