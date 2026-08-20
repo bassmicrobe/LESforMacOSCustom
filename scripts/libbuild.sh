@@ -1,6 +1,8 @@
 #!/bin/bash
 # Helper functions for Hammerspoon build.sh
 
+PYTHON_VENV_DIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/les-python-venv"
+
 ############################## ERROR FUNCTIONS ##############################
 
 function fail() {
@@ -223,11 +225,20 @@ function op_installdeps() {
     brew install coreutils jq xcbeautify gawk cocoapods gh || fail "Unable to install Homebrew dependencies"
 
     echo "  Python packages..."
-    python3 -m pip install --user --disable-pip-version-check --require-hashes -r "${HAMMERSPOON_HOME}/requirements.txt" || fail "Unable to install Python dependencies"
+    python3 -m venv "${PYTHON_VENV_DIR}" || fail "Unable to create Python virtual environment"
+    "${PYTHON_VENV_DIR}/bin/python3" -m pip install --disable-pip-version-check --require-hashes -r "${HAMMERSPOON_HOME}/requirements.txt" || fail "Unable to install Python dependencies"
 
     if [ "${INSTALLDEPS_FULL}" == "1" ]; then
         echo "  Ruby packages..."
         /usr/bin/gem install --user t || fail "Unable to install Ruby dependencies"
+    fi
+}
+
+function python_for_build() {
+    if [ -x "${PYTHON_VENV_DIR}/bin/python3" ]; then
+        printf '%s\n' "${PYTHON_VENV_DIR}/bin/python3"
+    else
+        command -v python3
     fi
 }
 
@@ -636,7 +647,7 @@ function assert_xcbeautify() {
 
 function assert_docs_requirements() {
   echo "Checking Python requirements.txt is satisfied..."
-  python3 - "${HAMMERSPOON_HOME}/requirements.txt" <<'PY' || fail "Python documentation dependencies are not installed at locked versions"
+  "$(python_for_build)" - "${HAMMERSPOON_HOME}/requirements.txt" <<'PY' || fail "Python documentation dependencies are not installed at locked versions"
 import importlib.metadata
 import re
 import sys
