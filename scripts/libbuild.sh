@@ -50,15 +50,25 @@ function op_build() {
         XCODE_CONFIG_ARGS=(-xcconfig "${XCCONFIG_FILE}")
     fi
 
-    # Build the app
-    echo "-> xcodebuild -workspace Hammerspoon.xcworkspace -scheme ${XCODE_SCHEME} -configuration ${XCODE_CONFIGURATION} -destination \"platform=macOS\" -archivePath ${HAMMERSPOON_XCARCHIVE_PATH} archive | tee ${BUILD_HOME}/${XCODE_CONFIGURATION}-build.log"
-    xcodebuild -workspace Hammerspoon.xcworkspace \
-               -scheme "${XCODE_SCHEME}" \
-               -configuration "${XCODE_CONFIGURATION}" \
-               -destination "platform=macOS" \
-               -archivePath "${HAMMERSPOON_XCARCHIVE_PATH}" \
-               "${XCODE_CONFIG_ARGS[@]}" \
-               "${BUILD_COMMAND}" | tee "${BUILD_HOME}/${XCODE_CONFIGURATION}-build.log" | xcbeautify_output
+    # Build the app. Archives and test builds accept different output options;
+    # build-for-testing must write its xctestrun file into derived data rather
+    # than receiving an archive path.
+    local XCODE_BUILD_ARGS=(
+        -workspace Hammerspoon.xcworkspace
+        -scheme "${XCODE_SCHEME}"
+        -configuration "${XCODE_CONFIGURATION}"
+        -destination "platform=macOS"
+    )
+    if [ "${BUILD_COMMAND}" == "archive" ]; then
+        XCODE_BUILD_ARGS+=(-archivePath "${HAMMERSPOON_XCARCHIVE_PATH}")
+    fi
+    if ((${#XCODE_CONFIG_ARGS[@]} > 0)); then
+        XCODE_BUILD_ARGS+=("${XCODE_CONFIG_ARGS[@]}")
+    fi
+    XCODE_BUILD_ARGS+=("${BUILD_COMMAND}")
+
+    echo "-> xcodebuild ${XCODE_BUILD_ARGS[*]} | tee ${BUILD_HOME}/${XCODE_CONFIGURATION}-build.log"
+    xcodebuild "${XCODE_BUILD_ARGS[@]}" | tee "${BUILD_HOME}/${XCODE_CONFIGURATION}-build.log" | xcbeautify_output
 
     if [ "${BUILD_COMMAND}" == "archive" ]; then
         # Export the app bundle from the archive
@@ -94,12 +104,18 @@ function op_test() {
     # Preserve logs and formatted output, then propagate xcodebuild's real exit.
     set +e
 
-    xcodebuild -workspace Hammerspoon.xcworkspace \
-               -scheme "${XCODE_SCHEME}" \
-               -configuration "${XCODE_CONFIGURATION}" \
-               -resultBundlePath "${BUILD_HOME}/TestResults" \
-               "${XCODE_CONFIG_ARGS[@]}" \
-               test-without-building 2>&1 | tee "${BUILD_HOME}/test.log" | xcbeautify_output
+    local XCODE_TEST_ARGS=(
+        -workspace Hammerspoon.xcworkspace
+        -scheme "${XCODE_SCHEME}"
+        -configuration "${XCODE_CONFIGURATION}"
+        -resultBundlePath "${BUILD_HOME}/TestResults"
+    )
+    if ((${#XCODE_CONFIG_ARGS[@]} > 0)); then
+        XCODE_TEST_ARGS+=("${XCODE_CONFIG_ARGS[@]}")
+    fi
+    XCODE_TEST_ARGS+=(test-without-building)
+
+    xcodebuild "${XCODE_TEST_ARGS[@]}" 2>&1 | tee "${BUILD_HOME}/test.log" | xcbeautify_output
     local TEST_STATUS=${PIPESTATUS[0]}
 
     set -e
