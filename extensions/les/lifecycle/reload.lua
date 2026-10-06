@@ -145,6 +145,12 @@ function reloadLES()
     -- reloadLES() is also run a single time on startup to build everything for the first time, standardizing the routine.
     -- all of the functions used here are explained in detail up above.
 
+    -- Do not destroy the working menus or apply startup preferences until the
+    -- settings file has been read and initialized successfully.
+    if settingsManager:init() == false then
+        print("reloadLES(): settings initialization failed; keeping current menus")
+        return false
+    end
     clearcategories()
     -- Delete invisible menubar items before dropping refs; otherwise each reload leaks
     -- NSStatusItems and hs.menubar.new() can return nil (main LES icon vanishes).
@@ -161,7 +167,6 @@ function reloadLES()
         pianoMenu = nil
     end
     testmenuconfig()
-    settingsManager:init()
     settingsManager:parse()
     settingsManager:map()
     -- Guard buildPluginMenu so one malformed menuconfig line cannot abort

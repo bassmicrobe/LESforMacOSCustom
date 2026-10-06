@@ -17,6 +17,7 @@ local storageKey = require("util.storagekey")
 local noteId = require("util.noteid")
 local windowframe = require("util.windowframe")
 local utf8text = require("util.utf8text")
+local notecontext = require("util.notecontext")
 
 ---@type hs.webview|nil
 local _webview = nil
@@ -345,7 +346,16 @@ function resize(el) {
     el.style.height = Math.min(el.scrollHeight, 110) + 'px';
 }
 function onKey(e) {
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter' && e.metaKey) { e.preventDefault(); submit(); }
+}
+function confirmContextChange() {
+    if (notePending || deletionPending || document.getElementById('aiBtn').disabled) {
+        setStatus('__CONTEXT_BUSY_JS__', false);
+        return false;
+    }
+    var input = document.getElementById('inp');
+    return !input.value.trim() || confirm('__CONTEXT_CONFIRM_JS__');
 }
 // Always stringify: WKWebView → Lua is most reliable as JSON text
 // (bridged NSDictionary tables can fail key lookups on the Lua side).
@@ -435,6 +445,8 @@ document.getElementById('inp').focus();
         AI_SUMMARY_JS = jsEscape(L("projectnotes_ai_summary")),
         AI_ADDED_JS = jsEscape(L("projectnotes_ai_added")),
         AI_FAILED_JS = jsEscape(L("projectnotes_ai_failed")),
+        CONTEXT_BUSY_JS = jsEscape(L("notes_context_busy")),
+        CONTEXT_CONFIRM_JS = jsEscape(L("notes_context_confirm")),
     })
     return string.format(template, displayName, timelineHTML)
 end
@@ -457,12 +469,21 @@ function openProjectNotes()
     -- Reopening the same project must preserve the user's draft. A real project
     -- change gets a new document because the header and data context differ.
     if _webview ~= nil then
+        notecontext.cancel(_webview)
         local projectChanged = _currentProject ~= projectName
-        _currentProject = projectName
         if projectChanged then
-            _summaryGeneration = _summaryGeneration + 1
-            _summaryPendingProject = nil
-            _webview:html(buildNotesHTML(projectName, projectnotes.load(projectName)))
+            local currentWebview, previousProject = _webview, _currentProject
+            notecontext.confirm(currentWebview, function()
+                return _webview == currentWebview and _currentProject == previousProject
+            end, function()
+                local html = buildNotesHTML(projectName, projectnotes.load(projectName))
+                currentWebview:html(html)
+                _currentProject = projectName
+                _summaryGeneration = _summaryGeneration + 1
+                _summaryPendingProject = nil
+            end, function()
+                HSMakeAlert(programName, L("notes_context_failed"), true, "warning")
+            end)
         else
             refreshTimeline(_webview, projectName)
         end
@@ -622,6 +643,7 @@ function openProjectNotes()
 
     _webview:windowCallback(function(action)
         if action == "closing" and _webview == currentWebview then
+            notecontext.cancel(currentWebview)
             _summaryGeneration = _summaryGeneration + 1
             _summaryPendingProject = nil
             _webview = nil

@@ -103,6 +103,26 @@ function settingsManager.getVal(self, key)
   return self[key]["value"]
 end
 
+--- Validate every settings boundary consistently before updating disk or memory.
+--- GUI strings remain compatible with numeric callers, but objects/booleans,
+--- non-finite numbers, fractional integers and invalid toggles are rejected.
+---@param setting table|nil
+---@param value any
+---@return boolean
+local function isValidSettingValue(setting, value)
+  if type(setting) ~= "table" then return false end
+  local valueType = type(value)
+  if valueType ~= "string" and valueType ~= "number" then return false end
+  local num = tonumber(value)
+  if valueType == "number" and (num ~= num or num == math.huge or num == -math.huge) then return false end
+  local settingType = setting["type"]
+  if settingType == "str" then return true end
+  if num == nil or num ~= num or num == math.huge or num == -math.huge or num < 0 then return false end
+  if settingType == "bin" then return num == 0 or num == 1 end
+  if settingType == "int" then return num % 1 == 0 end
+  return settingType == "flt"
+end
+
 --- Set a value in memory. NON-fatal on bad numeric input: a malformed number
 --- is logged and left nil (so init() can self-heal from the default) or falls
 --- back to the type default — never panicExit() (that killed the app mid-save).
@@ -110,24 +130,29 @@ end
 ---@param key string
 ---@param value string|number
 function settingsManager.setVal(self, key, value)
+  if type(self[key]) ~= "table" then return false end
   local _type = self[key]["type"]
   if _type == "int"
      or _type == "flt"
      or _type == "bin"
   then
     local num = tonumber(value)
-    if num ~= nil then
+    if isValidSettingValue(self[key], value) then
       self[key]["value"] = num
     else
       -- Do NOT panicExit: log, fall back to the parsed default if possible,
       -- otherwise leave nil so init() backfills it from the default line.
       print(string.format(
-        [[setVal(): unable to parse value "%s" for key "%s" of type %s; falling back to default]],
-        tostring(value), tostring(key), tostring(_type)
+        [[setVal(): invalid value for key "%s" of type %s; falling back to default]],
+        tostring(key), tostring(_type)
       ))
       self[key]["value"] = tonumber(self[key]["default"])
     end
   else
+    if not isValidSettingValue(self[key], value) then
+      print("setVal(): invalid string value for key " .. tostring(key))
+      return false
+    end
     -- String settings (C5/C6 self-heal): heal an already-corrupted
     -- "未設定sk-..." back to "sk-..." by stripping the leading sentinel — BUT
     -- preserve the exact default sentinel '未設定' itself (settings.lua:74).
@@ -184,41 +209,8 @@ local function isLesIniSkippableLine(line)
 end
 
 function settingsManager.load(self, fileTable)
-  -- TODO: allow termination logic to have a graceful shutdown.
-  --       currently, validateValue either returns true or kills
-  --       the program.
-  --- Validate a value for its declared type. NON-fatal and nil-safe: a value
-  --- that doesn't parse as a number returns false (so load() skips the line and
-  --- init() self-heals from the default) instead of panic-exiting at startup.
-  ---@param key string
-  ---@param value string
-  ---@param _type string  one of "str" | "bin" | "int" | "flt"
-  ---@return boolean ok
-  local function validateValue(key, value, _type)
-    -- String settings: no pattern gate (legacy "%s" was a Lua-pattern bug matching whitespace only)
-    if _type == "str" then
-      return true
-    end
-    -- Explicit, nil-safe numeric parse FIRST (drops the fragile [sign] %d gate).
-    local num = tonumber(value)
-    if num == nil then
-      print(string.format(
-        [[validateValue(): "%s" for key "%s" is not a valid number; will self-heal from default]],
-        tostring(value), tostring(key)
-      ))
-      return false
-    end
-    if _type == "bin" then
-      return num == 1 or num == 0
-    elseif _type == "int" then
-      -- 0 must be accepted: bookmark coordinates are 0-based and the GUI allows min="0".
-      return num >= 0
-    elseif _type == "flt" then
-      return true
-    end
-    return false
-  end
-
+  -- Invalid on-disk values are skipped without aborting startup. init() can
+  -- then backfill them with their declared, type-checked defaults.
   -- O(n) single-pass: extract key from each line, then look up in self
   for idx = 1, #fileTable, 1 do
     local line = fileTable[idx];
@@ -247,7 +239,7 @@ function settingsManager.load(self, fileTable)
       print(string.format("%s found", key))
       -- Wrap validate+setVal so no validator/setter bug can os.exit() at boot.
       -- A malformed numeric line leaves the value nil → init() backfills it.
-      if validateValue(key, _val, sType) then
+      if isValidSettingValue(self[key], _val) then
         local ok, err = pcall(function() self:setVal(key, _val) end)
         if not ok then
           print(string.format("settingsManager.load(): setVal failed for \"%s\": %s", key, tostring(err)))
@@ -310,13 +302,17 @@ local function secureSettingsFiles()
   -- Older versions created timestamped backups using the default umask. Secure
   -- every retained backup as well so an API key cannot remain group-readable.
   if type(SetSecureFileMode) == "function" then
-    local ok, iter = pcall(function() return hs.fs.dir(ScriptUserPath) end)
-    if ok and iter then
-      for file in iter do
+    local ok, scanError = pcall(function()
+      -- Keep the complete iterator tuple, including the native directory state
+      -- and Lua 5.4 close value, by iterating directly inside the protected call.
+      for file in hs.fs.dir(ScriptUserPath) do
         if type(file) == "string" and file:match("^settings_%d+%.ini$") then
           SetSecureFileMode(strJoinPaths(ScriptUserPath, file))
         end
       end
+    end)
+    if not ok then
+      print("[settings] unable to secure retained backups: " .. tostring(scanError))
     end
   end
 end
@@ -330,12 +326,19 @@ end
 ---@param _depth integer|nil  internal recursion depth (do not pass externally)
 function settingsManager.init(self, _depth)
   _depth = _depth or 0
-  -- Clear loaded values because we could be called multiple times
-  self:bind()
   ShellCreateDirectory(ScriptUserPath)
 
   -- Create new settings file if it doesn't exist
   if ioIsFilePresent(GetDataPath(ConfigFile)) == false then
+    -- ioIsFilePresent checks readability, not existence. Never truncate an
+    -- existing unreadable file (or dangling link) when handling first run.
+    if hs and hs.fs and type(hs.fs.symlinkAttributes) == "function" then
+      local inspected, existing = pcall(hs.fs.symlinkAttributes, GetDataPath(ConfigFile))
+      if not inspected or existing ~= nil then
+        print("settingsManager.init(): existing settings.ini is unavailable; keeping current settings")
+        return false
+      end
+    end
     ShellCreateEmptyFile(GetDataPath(ConfigFile))
   end
   -- Apply permissions on every startup, including already-valid files created
@@ -344,7 +347,13 @@ function settingsManager.init(self, _depth)
 
   -- Read settings file and load it (always under ~/.les/, never CWD-relative)
   local settingsFile = {}
-  fileToTable(GetDataPath(ConfigFile), settingsFile)
+  if not fileToTable(GetDataPath(ConfigFile), settingsFile) then
+    print("settingsManager.init(): unable to read settings.ini; preserving file and loaded values")
+    return false
+  end
+  -- Only replace loaded values after a successful read. A transient read error
+  -- must not erase the working configuration or trigger a destructive backfill.
+  self:bind()
   self:load(settingsFile)
 
   -- Check if every settings value has been loaded from the configuration file
@@ -366,7 +375,7 @@ function settingsManager.init(self, _depth)
     -- re-init and a flood of timestamped backup files if a value never loads).
     if _depth >= 1 then
       print("settingsManager.init(): backfill did not resolve all values; stopping recursion")
-      return
+      return false
     end
 
     -- Backup current settings file. Only when it exists (avoids spamming an
@@ -383,18 +392,23 @@ function settingsManager.init(self, _depth)
       -- Keep only the 5 most recent settings_<epoch>.ini backups. Index hs.fs
       -- INSIDE the pcall closure so a missing hs.fs (e.g. test env) is caught
       -- rather than thrown while evaluating the argument.
-      local ok, iter = pcall(function() return hs.fs.dir(ScriptUserPath) end)
-      if ok and iter then
+      local ok, pruneError = pcall(function()
         local backups = {}
-        for file in iter do
+        for file in hs.fs.dir(ScriptUserPath) do
           if type(file) == "string" and file:match("^settings_%d+%.ini$") then
             backups[#backups + 1] = file
           end
         end
         table.sort(backups)  -- fixed-width epoch names sort chronologically
         for i = 1, #backups - 5 do
-          os.remove(strJoinPaths(ScriptUserPath, backups[i]))
+          local removed, removeError = os.remove(strJoinPaths(ScriptUserPath, backups[i]))
+          if not removed then
+            print("[settings] unable to remove old backup: " .. tostring(removeError))
+          end
         end
+      end)
+      if not ok then
+        print("[settings] unable to inspect retained backups for pruning: " .. tostring(pruneError))
       end
     end
 
@@ -430,12 +444,16 @@ function settingsManager.init(self, _depth)
     end
 
     -- Flush settings file to disk
-    tableToFile(GetDataPath(ConfigFile), settingsFile)
+    if not tableToFile(GetDataPath(ConfigFile), settingsFile) then
+      print("settingsManager.init(): unable to write settings.ini defaults")
+      return false
+    end
     secureSettingsFiles()
     print("settingsManager.init(): flushed settings.ini to disk, reattempting to load configuration file")
     -- Re-load configuration file and hope 'valuesAllLoaded' is true this time
-    self:init(_depth + 1)
+    return self:init(_depth + 1)
   end
+  return true
 end
 
 -- This is the closest thing we have to a real setVal, current setVal
@@ -449,9 +467,16 @@ end
 -- values, it's going to be a bit of a mess...
 
 function settingsManager.writeVal(self, key, val)
+    if type(key) ~= "string" or not isValidSettingValue(self[key], val) then
+      print("[settings] writeVal: invalid key or value; keeping current settings")
+      return false
+    end
     ShellCreateDirectory(ScriptUserPath)
     local settingsFile = {}
-    fileToTable(GetDataPath(ConfigFile), settingsFile)
+    if not fileToTable(GetDataPath(ConfigFile), settingsFile) then
+      print("[settings] writeVal: unable to read settings.ini; keeping current settings")
+      return false
+    end
     local replaced = false
     for idx = 1, #settingsFile, 1 do
         local line = settingsFile[idx]
@@ -486,9 +511,24 @@ function settingsManager.writeFromGui(self, kv)
       print("[settings] writeFromGui: kv is not a table (" .. tostring(type(kv)) .. ")")
       return false
     end
+    local validPatch = {}
+    for key, val in pairs(kv) do
+      if type(key) == "string" and type(self[key]) == "table" then
+        if not isValidSettingValue(self[key], val) then
+          -- Never log raw input: even a malformed field may contain a secret.
+          print("[settings] writeFromGui: invalid value for " .. key .. "; keeping current settings")
+          return false
+        end
+        validPatch[key] = val
+      end
+    end
+    if next(validPatch) == nil then return false end
     ShellCreateDirectory(ScriptUserPath)
     local settingsFile = {}
-    fileToTable(GetDataPath(ConfigFile), settingsFile)
+    if not fileToTable(GetDataPath(ConfigFile), settingsFile) then
+      print("[settings] writeFromGui: unable to read settings.ini; keeping current settings")
+      return false
+    end
 
     local function applyOneKey(key, val)
         if type(key) ~= "string" or type(self[key]) ~= "table" then return end
@@ -510,30 +550,10 @@ function settingsManager.writeFromGui(self, kv)
         end
     end
 
-    --- A numeric key with an unparseable value (e.g. "" from an emptied
-    --- <input type=number>) must be dropped here: writing it would corrupt
-    --- the file, and setVal would panic-exit the app mid-save.
-    local function isWritableValue(key, val)
-        local _type = self[key]["type"]
-        if _type == "bin" or _type == "int" or _type == "flt" then
-            local num = tonumber(val)
-            if num == nil or num < 0 then
-                print(string.format(
-                    "[settings] writeFromGui: dropping invalid value %q for numeric key %q (keeping current value)",
-                    tostring(val), key
-                ))
-                return false
-            end
-        end
-        return true
-    end
-
     local nPatch = 0
-    for key, val in pairs(kv) do
-        if type(key) == "string" and type(self[key]) == "table" and isWritableValue(key, val) then
-            applyOneKey(key, val)
-            nPatch = nPatch + 1
-        end
+    for key, val in pairs(validPatch) do
+        applyOneKey(key, val)
+        nPatch = nPatch + 1
     end
 
     local outPath = GetDataPath(ConfigFile)
@@ -548,12 +568,10 @@ function settingsManager.writeFromGui(self, kv)
     -- so the in-memory value equals exactly what a fresh load() would parse
     -- (disk == memory == reloaded). pcall keeps a setter bug from bubbling up
     -- out of a GUI save.
-    for key, val in pairs(kv) do
-        if type(key) == "string" and type(self[key]) == "table" and isWritableValue(key, val) then
-            local ok, err = pcall(function() self:setVal(key, normalizeIni(key, val)) end)
-            if not ok then
-                print(string.format("[settings] writeFromGui: setVal failed for %q: %s", key, tostring(err)))
-            end
+    for key, val in pairs(validPatch) do
+        local ok, err = pcall(function() self:setVal(key, normalizeIni(key, val)) end)
+        if not ok then
+            print(string.format("[settings] writeFromGui: setVal failed for %q: %s", key, tostring(err)))
         end
     end
     return true

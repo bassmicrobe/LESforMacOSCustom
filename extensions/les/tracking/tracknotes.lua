@@ -8,6 +8,7 @@ local storageKey = require("util.storagekey")
 local noteId = require("util.noteid")
 local windowframe = require("util.windowframe")
 local utf8text = require("util.utf8text")
+local notecontext = require("util.notecontext")
 
 ---@type hs.webview|nil
 local _webview = nil
@@ -312,7 +313,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
   </div>
   <div class="track-row">
     <button type="button" class="nav-btn" aria-label="__PREV_LABEL__" onclick="nav(-1)">&#9664;</button>
-    <input id="trackInput" aria-label="__TRACK_LABEL__" maxlength="__MAX_TRACK_CODE_UNITS__" placeholder="__TRACK_PLACEHOLDER__" value="%s" onchange="switchTrack(this.value.trim())" onkeydown="if(event.key==='Enter'){this.blur();switchTrack(this.value.trim());}">
+    <input id="trackInput" aria-label="__TRACK_LABEL__" maxlength="__MAX_TRACK_CODE_UNITS__" placeholder="__TRACK_PLACEHOLDER__" value="%s" onchange="switchTrack(this.value.trim())" onkeydown="if(!event.isComposing&&event.keyCode!==229&&event.key==='Enter'){this.blur();switchTrack(this.value.trim());}">
     <button type="button" class="detect-btn" onclick="detect()">__DETECT__</button>
     <button type="button" class="nav-btn" aria-label="__NEXT_LABEL__" onclick="nav(1)">&#9654;</button>
   </div>
@@ -321,7 +322,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 <div class="status" id="status" role="status" aria-live="polite"></div>
 <div class="inp-area">
   <textarea id="inp" aria-label="__INPUT_LABEL__" maxlength="__MAX_NOTE_CODE_UNITS__" placeholder="__INPUT_PLACEHOLDER__" rows="1"
-    oninput="resz(this)" onkeydown="if(event.key==='Enter'&&event.metaKey){event.preventDefault();addNote();}"></textarea>
+    oninput="resz(this)" onkeydown="if(!event.isComposing&&event.keyCode!==229&&event.key==='Enter'&&event.metaKey){event.preventDefault();addNote();}"></textarea>
   <button type="button" class="add" id="addBtn" onclick="addNote()">__ADD__</button>
 </div>
 <script>
@@ -333,6 +334,14 @@ var deletionPending = false;
 var maxTrackNameLength = __MAX_TRACK_LENGTH__;
 var maxNoteLength = __MAX_NOTE_LENGTH__;
 function charLength(value){return Array.from(value).length;}
+function confirmContextChange() {
+  if (notePending || deletionPending) {
+    setStatus('__CONTEXT_BUSY_JS__', false);
+    return false;
+  }
+  var input = document.getElementById('inp');
+  return !input.value.trim() || confirm('__CONTEXT_CONFIRM_JS__');
+}
 function post(p){window.webkit.messageHandlers.lesTrackNotes.postMessage(JSON.stringify(p));}
 function escH(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function resz(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,100)+'px';}
@@ -423,6 +432,8 @@ document.getElementById('inp').focus();
         SAVE_FAILED_JS = escSQ(L("notes_save_failed")),
         DELETE_CONFIRM_JS = escSQ(L("notes_delete_confirm")),
         DETECT_FAILED_JS = escSQ(L("tracknotes_detect_failed")),
+        CONTEXT_BUSY_JS = escSQ(L("notes_context_busy")),
+        CONTEXT_CONFIRM_JS = escSQ(L("notes_context_confirm")),
     })
     return string.format(template, displayProject, detectedVal, escSQ(trackName or ""), notesJ, tracksJ)
 end
@@ -454,9 +465,10 @@ local function refreshView(projectName, preferredTrack)
     if not _webview then return end
     local all = tracknotes.loadAll(projectName)
     local selectedTrack = chooseInitialTrack(all, preferredTrack)
+    local html = buildHTML(projectName, selectedTrack, all)
+    _webview:html(html)
     _project = projectName
     _track = selectedTrack
-    _webview:html(buildHTML(projectName, selectedTrack, all))
 end
 
 --- Open (or focus) the track notes panel.
@@ -464,9 +476,16 @@ function openTrackNotes()
     local project = _G.trackname or "unsaved_project"
 
     if _webview ~= nil then
+        notecontext.cancel(_webview)
         if _project ~= project then
-            local detected = detectTrackName()
-            refreshView(project, detected)
+            local currentWebview, previousProject = _webview, _project
+            notecontext.confirm(currentWebview, function()
+                return _webview == currentWebview and _project == previousProject
+            end, function()
+                refreshView(project, detectTrackName())
+            end, function()
+                HSMakeAlert(programName, L("notes_context_failed"), true, "warning")
+            end)
         end
         local w = _webview:hswindow()
         if w then w:focus() end
@@ -560,6 +579,7 @@ function openTrackNotes()
     -- always-false, so cleanup never ran and the panel could not be reopened.
     _webview:windowCallback(function(action)
         if action == "closing" and _webview == currentWebview then
+            notecontext.cancel(currentWebview)
             _webview  = nil
             _uc       = nil
             _project  = nil

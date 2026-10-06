@@ -171,8 +171,16 @@ function bookmarkfunc() -- this allows you to use the bookmark click stuff.
     end)
 end
 
-local debounce2 = 0
 local pluginStats = require("tracking.pluginstats")
+local loadGeneration = 0
+local pendingLoadTimer
+
+function cancelPendingPluginLoad()
+    loadGeneration = loadGeneration + 1
+    if pendingLoadTimer then pendingLoadTimer:stop() end
+    pendingLoadTimer = nil
+end
+
 local function rcLog(msg)
     -- Only log when debug mode is enabled. Previously this appended to debug.log
     -- on every plugin load with no gate or rotation, growing the file unbounded.
@@ -189,11 +197,29 @@ local function rcLog(msg)
 end
 -- the plugin names need to have any newline characters removed
 function loadPlugin(plugin)
+    cancelPendingPluginLoad()
+    if type(plugin) ~= "string" then return false end
     local pluginCleaned = plugin:match '^%s*(.*%S)' or ''
     pluginCleaned = pluginCleaned:gsub('^"(.*)"$', '%1')
-    pluginStats.recordUse(pluginCleaned)
+    if pluginCleaned == "" or pluginCleaned:find("[%c]") then return false end
     local liveApp = getLiveHsAppObj and getLiveHsAppObj()
     rcLog("loadPlugin called: plugin=" .. tostring(pluginCleaned) .. " liveApp=" .. tostring(liveApp ~= nil))
+    if not liveApp then return false end
+    local requestGeneration = loadGeneration
+    local loadSpeed = math.max(tonumber(_G.loadspeed) or 0.3, 0.1)
+    local function isCurrentAndFocused()
+        if requestGeneration ~= loadGeneration then return false end
+        local ok, front = pcall(function() return liveApp:isFrontmost() end)
+        return ok and front == true
+    end
+    local function schedule(delay, callback)
+        pendingLoadTimer = hs.timer.doAfter(delay, function()
+            if requestGeneration ~= loadGeneration then return end
+            pendingLoadTimer = nil
+            if not isCurrentAndFocused() then cancelPendingPluginLoad(); return end
+            callback()
+        end)
+    end
 
     -- Capture modifier state NOW before any async delay; the user may release
     -- Cmd before the timer fires so we must snapshot it synchronously.
@@ -212,54 +238,53 @@ function loadPlugin(plugin)
     end
 
     local function doTypeAndAdd()
-        local isFront = liveApp and liveApp:isFrontmost()
-        rcLog("typing: plugin=" .. pluginCleaned .. " liveIsFront=" .. tostring(isFront) .. " tempautoadd=" .. tostring(tempautoadd) .. " _G.autoadd=" .. tostring(_G.autoadd))
-        hs.eventtap.keyStrokes(pluginCleaned)
+        rcLog("typing: plugin=" .. pluginCleaned .. " tempautoadd=" .. tostring(tempautoadd))
+        hs.eventtap.keyStrokes(pluginCleaned, liveApp)
+        pluginStats.recordUse(pluginCleaned)
+
+        local function resetBookmark()
+            if _G.resettobrowserbookmark == 1 then
+                schedule(loadSpeed <= 0.5 and 0.1 or 0.3, bookmarkfunc)
+            end
+        end
 
         if tempautoadd == 1 then
-            local addDelay = math.max(_G.loadspeed or 0.3, 1.0)
-            hs.timer.doAfter(addDelay, function()
+            local addDelay = math.max(loadSpeed, 1.0)
+            schedule(addDelay, function()
                 rcLog("sending down+return+escape delay=" .. tostring(addDelay))
-                hs.eventtap.keyStroke({}, "down", 0)
-                hs.timer.doAfter(0.1, function()
-                    hs.eventtap.keyStroke({}, "return", 0)
-                    hs.eventtap.keyStroke({}, "escape", 0)
+                hs.eventtap.keyStroke({}, "down", 0, liveApp)
+                schedule(0.1, function()
+                    hs.eventtap.keyStroke({}, "return", 0, liveApp)
+                    hs.eventtap.keyStroke({}, "escape", 0, liveApp)
+                    resetBookmark()
                 end)
-                if _G.resettobrowserbookmark == 1 then
-                    local bookmarkDelay = _G.loadspeed <= 0.5 and 0.1 or 0.3
-                    hs.timer.doAfter(bookmarkDelay, bookmarkfunc)
-                end
             end)
-        elseif _G.resettobrowserbookmark == 1 then
-            local bookmarkDelay = _G.loadspeed <= 0.5 and 0.1 or 0.3
-            hs.timer.doAfter(bookmarkDelay, bookmarkfunc)
+        else
+            resetBookmark()
         end
     end
 
-    if liveApp then
-        rcLog("activating liveApp")
-        liveApp:activate()
-        -- Poll for Live to come frontmost instead of a blind 1.0s wait, then
-        -- scale the pre-type delay off loadspeed. A ~2s safety cap covers the
-        -- case where activation never completes. Removes the old fixed 1.5s
-        -- floor that every plugin insertion paid regardless of loadspeed.
-        local waited = 0
-        hs.timer.waitUntil(
-            function()
-                waited = waited + 0.05
-                local ok, front = pcall(function() return liveApp:isFrontmost() end)
-                return (ok and front) or waited >= 2.0
-            end,
-            function()
-                rcLog("sending Cmd+F (frontmost or timeout)")
-                hs.eventtap.keyStroke("cmd", "f", 0)
-                hs.timer.doAfter(math.max(_G.loadspeed or 0.3, 0.1), doTypeAndAdd)
-            end,
-            0.05
-        )
-    else
-        rcLog("liveApp not found, calling sendKeys immediately")
-        hs.eventtap.keyStroke("cmd", "f", 0)
-        doTypeAndAdd()
-    end
+    rcLog("activating liveApp")
+    local activated, result = pcall(function() return liveApp:activate() end)
+    if not activated or result == false then return false end
+    -- Use elapsed time so a busy run loop cannot extend the activation wait.
+    local deadline = hs.timer.secondsSinceEpoch() + 2
+    pendingLoadTimer = hs.timer.waitUntil(
+        function()
+            return requestGeneration ~= loadGeneration or isCurrentAndFocused() or hs.timer.secondsSinceEpoch() >= deadline
+        end,
+        function()
+            if requestGeneration ~= loadGeneration then return end
+            pendingLoadTimer = nil
+            if not isCurrentAndFocused() then
+                rcLog("Live activation timed out; plugin insertion cancelled")
+                cancelPendingPluginLoad()
+                return
+            end
+            hs.eventtap.keyStroke({"cmd"}, "f", 0, liveApp)
+            schedule(loadSpeed, doTypeAndAdd)
+        end,
+        0.05
+    )
+    return true
 end

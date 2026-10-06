@@ -47,6 +47,13 @@ local function collectPlugins(menuTable, category, results)
     end
 end
 
+-- Lua character classes operate on bytes, so [^›] corrupts UTF-8 names
+-- containing any byte of the separator. Split on the complete breadcrumb.
+local function topCategory(category)
+    local boundary = category:find(" › ", 1, true)
+    return (boundary and category:sub(1, boundary - 1) or category):match("^%s*(.-)%s*$")
+end
+
 --- Extract unique top-level categories from choices.
 ---@param choices table
 ---@return table  Sorted list of category names
@@ -57,8 +64,7 @@ local function extractCategories(choices)
         local topCat = c.category
         if topCat ~= "" then
             -- Extract top-level category (before first " › ")
-            local top = topCat:match("^([^›]+)") or topCat
-            top = top:match("^%s*(.-)%s*$")
+            local top = topCategory(topCat)
             if not seen[top] then
                 seen[top] = true
                 cats[#cats + 1] = top
@@ -72,9 +78,9 @@ end
 --- Sort choices by the given mode using plugin stats.
 ---@param choices table
 ---@param sortMode string
+---@param stats table  Stats snapshot for this open
 ---@return table  New sorted table
-local function sortChoices(choices, sortMode)
-    local stats = pluginStats.getAll()
+local function sortChoices(choices, sortMode, stats)
     local sorted = {}
     for i, c in ipairs(choices) do
         sorted[i] = c
@@ -140,15 +146,15 @@ end
 ---@param allChoices table  Raw collected plugins
 ---@param catFilter string|nil  Category filter (nil = all)
 ---@param sortMode string  Sort mode
+---@param stats table  Stats snapshot for this open
 ---@return table  Formatted choices for hs.chooser
-local function buildChoices(allChoices, catFilter, sortMode)
+local function buildChoices(allChoices, catFilter, sortMode, stats)
     -- Filter by category
     local filtered
     if catFilter then
         filtered = {}
         for _, c in ipairs(allChoices) do
-            local topCat = c.category:match("^([^›]+)") or c.category
-            topCat = topCat:match("^%s*(.-)%s*$")
+            local topCat = topCategory(c.category)
             if topCat == catFilter then
                 filtered[#filtered + 1] = c
             end
@@ -158,10 +164,9 @@ local function buildChoices(allChoices, catFilter, sortMode)
     end
 
     -- Sort
-    local sorted = sortChoices(filtered, sortMode)
+    local sorted = sortChoices(filtered, sortMode, stats)
 
-    -- Format for hs.chooser with stats in subText
-    local stats = pluginStats.getAll()
+    -- Format for hs.chooser with the same stats snapshot used by the sort.
     local result = {}
     for _, c in ipairs(sorted) do
         result[#result + 1] = {
@@ -213,8 +218,7 @@ local function openFavoritesChooser(allChoices)
 end
 
 --- Open the sort selection chooser.
----@param allChoices table  Raw plugin list (for rebuilding main chooser)
-local function openSortChooser(allChoices)
+local function openSortChooser()
     local sortOptions = {
         { text = "名前順 (A→Z)",         subText = "アルファベット順で表示",     mode = "name" },
         { text = "使用頻度順",            subText = "よく使うプラグインを上位に", mode = "frequency" },
@@ -293,7 +297,7 @@ function openPluginChooser()
 
         -- Handle special actions
         if choice.action == "sort" then
-            openSortChooser(allChoices)
+            openSortChooser()
             return
         elseif choice.action == "category" then
             openCategoryChooser(allChoices)
@@ -331,22 +335,21 @@ function openPluginChooser()
     -- Build favorite choices (shown above the main list)
     local stats = pluginStats.getAll()
     local favoriteChoices = {}
+    local choicesByName = {}
+    for _, choice in ipairs(allChoices) do
+        if not choicesByName[choice.text] then choicesByName[choice.text] = choice end
+    end
     for _, name in ipairs(favoriteNames) do
-        -- Find the matching choice entry to get its fn
-        for _, c in ipairs(allChoices) do
-            if c.text == name then
-                favoriteChoices[#favoriteChoices + 1] = {
-                    text    = "★ " .. c.text,
-                    subText = formatSubText(c, stats),
-                    fn      = c.fn,
-                }
-                break
-            end
+        local choice = choicesByName[name]
+        if choice then
+            favoriteChoices[#favoriteChoices + 1] = {
+                text = "★ " .. choice.text, subText = formatSubText(choice, stats), fn = choice.fn,
+            }
         end
     end
 
     -- Build main choices
-    local mainChoices = buildChoices(allChoices, currentCategory, currentSort)
+    local mainChoices = buildChoices(allChoices, currentCategory, currentSort, stats)
 
     -- Combine: actions → favorites (if any) → all plugins
     local finalChoices = {}

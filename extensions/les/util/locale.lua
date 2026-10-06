@@ -59,6 +59,9 @@ local strings = {
     notes_delete_confirm      = "Delete this note?",
     notes_deleted             = "Deleted.",
     notes_delete_failed       = "Failed to delete.",
+    notes_context_confirm     = "This project has an unsaved note. Discard it and switch projects?",
+    notes_context_busy        = "Wait for the current operation to finish before switching projects.",
+    notes_context_failed      = "Could not switch projects safely. The current note and project have been kept. Try again.",
 
     -- AI chat
     chat_title                = "AI Assistant",
@@ -292,6 +295,8 @@ Write one suggestion per line without numbering.]],
     settings_form_unrecognized_alert        = "Could not save the settings because the form values were not recognized.\nCheck the [settingsgui] log in Console.",
     settings_write_failed                   = "Save failed (could not write the settings file).",
     settings_write_failed_alert             = "Could not write the settings file. Check permissions and available disk space.\n~/.les/settings.ini",
+    settings_load_failed                    = "Could not read or initialize the settings file. "
+        .. "Check its permissions and available disk space.\n~/.les/settings.ini",
     settings_save_applied_count             = "Saved and applied (%d items).",
     settings_save_notification              = "Settings were saved and applied to the running LES.",
     settings_no_valid_keys                  = "Could not save (there are no valid setting keys).",
@@ -446,6 +451,11 @@ Happy producing.]],
     notes_delete_confirm      = "このメモを削除しますか？",
     notes_deleted             = "削除しました",
     notes_delete_failed       = "削除に失敗しました",
+    notes_context_confirm     = "このプロジェクトに未保存のメモがあります。"
+        .. "破棄して別のプロジェクトに切り替えますか？",
+    notes_context_busy        = "操作が完了してからプロジェクトを切り替えてください。",
+    notes_context_failed      = "安全にプロジェクトを切り替えられませんでした。"
+        .. "現在のメモとプロジェクトを保持しています。もう一度お試しください。",
 
     -- AI chat
     chat_title                = "AI アシスタント",
@@ -681,6 +691,8 @@ Happy producing.]],
     settings_form_unrecognized_alert        = "設定を保存できませんでした（フォームの値を認識できません）。\nコンソールの [settingsgui] ログを確認してください。",
     settings_write_failed                   = "保存に失敗しました（設定ファイルへ書き込めません）",
     settings_write_failed_alert             = "設定ファイルへ書き込めませんでした（権限またはディスク容量を確認してください）。\n~/.les/settings.ini",
+    settings_load_failed                    = "設定ファイルを読み込み・初期化できませんでした。"
+        .. "権限とディスク容量を確認してください。\n~/.les/settings.ini",
     settings_save_applied_count             = "保存・反映しました（%d 項目）",
     settings_save_notification              = "設定を保存し、実行中の LES に反映しました。",
     settings_no_valid_keys                  = "保存できませんでした（有効な設定キーがありません）",

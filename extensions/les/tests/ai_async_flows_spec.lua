@@ -48,6 +48,7 @@ local function makeRecommendHs(screenFrame, failWebviewCreation)
             function instance:windowTitle(value) self.title = value return self end
             function instance:allowTextEntry() return self end
             function instance:html(value) self.htmlValue = value return self end
+            function instance:navigationCallback(callback) self.navigation = callback return self end
             function instance:windowCallback(callback) self.closeCallback = callback return self end
             function instance:deleteOnClose() return self end
             function instance:show() return self end
@@ -120,6 +121,51 @@ describe("AI UI asynchronous request lifecycle", function()
         rawset(_G, "uiLanguage", originalUiLanguage)
     end)
 
+    it("waits for the recommendation document before starting its initial request", function()
+        local openai = makeOpenAIHarness()
+        local hs, ui = makeRecommendHs()
+        package.preload["ai.openai"] = function() return openai.module end
+        package.preload["tracking.pluginstats"] = function()
+            return { getAll = function() return {} end }
+        end
+        rawset(_G, "hs", hs)
+
+        require("ai.recommend").open("warm pads")
+        local view = ui.webviews[1]
+        assert.are.equal(0, #openai.requests)
+        assert.are.equal(0, #view.evaluations)
+        assert.is_function(view.navigation)
+        view.navigation("didStartProvisionalNavigation")
+        assert.are.equal(0, #openai.requests)
+        view.navigation("didFinishNavigation")
+        assert.are.equal(1, #openai.requests)
+        assert.matches("warm pads", openai.requests[1][2].content, 1, true)
+        openai.callbacks[1]("fast response", nil)
+        assert.matches("fast response", view.evaluations[#view.evaluations], 1, true)
+        view.navigation("didFinishNavigation")
+        assert.are.equal(1, #openai.requests)
+    end)
+
+    it("does not start an initial request for a closed recommendation document", function()
+        local openai = makeOpenAIHarness()
+        local hs, ui = makeRecommendHs()
+        package.preload["ai.openai"] = function() return openai.module end
+        package.preload["tracking.pluginstats"] = function()
+            return { getAll = function() return {} end }
+        end
+        rawset(_G, "hs", hs)
+
+        local recommend = require("ai.recommend")
+        recommend.open()
+        local closedView = ui.webviews[1]
+        closedView.closeCallback("closing")
+        recommend.open()
+        closedView.navigation("didFinishNavigation")
+        assert.are.equal(0, #openai.requests)
+        ui.webviews[2].navigation("didFinishNavigation")
+        assert.are.equal(1, #openai.requests)
+    end)
+
     it("focuses an existing recommendation panel and drops stale replies after a real close", function()
         local openai = makeOpenAIHarness()
         local hs, ui = makeRecommendHs()
@@ -132,6 +178,7 @@ describe("AI UI asynchronous request lifecycle", function()
         local recommend = require("ai.recommend")
         recommend.open()
         local firstView = ui.webviews[1]
+        firstView.navigation("didFinishNavigation")
         local firstContent = ui.usercontents[1]
         assert.are.equal(1, #openai.callbacks)
 
@@ -151,6 +198,7 @@ describe("AI UI asynchronous request lifecycle", function()
         firstView.closeCallback("closing")
         recommend.open()
         local secondView = ui.webviews[2]
+        secondView.navigation("didFinishNavigation")
         assert.are.equal(3, #openai.callbacks)
         local evaluationsBeforeStaleReply = #secondView.evaluations
 
@@ -220,6 +268,7 @@ describe("AI UI asynchronous request lifecycle", function()
         rawset(_G, "hs", hs)
 
         require("ai.recommend").open()
+        ui.webviews[1].navigation("didFinishNavigation")
         openai.callbacks[1]("initial result", nil)
         ui.usercontents[1].callback({ body = { action = "ask", extra = string.rep("x", 4001) } })
 
@@ -299,6 +348,7 @@ describe("AI UI asynchronous request lifecycle", function()
         local recommendHs, recommendUI = makeRecommendHs()
         rawset(_G, "hs", recommendHs)
         require("ai.recommend").open()
+        recommendUI.webviews[1].navigation("didFinishNavigation")
         assert.matches("respond in English", openai.requests[1][1].content, 1, true)
         assert.are.equal("AI Plugin Suggestions", recommendUI.webviews[1].title)
         assert.matches('<html lang="en">', recommendUI.webviews[1].htmlValue, 1, true)
@@ -323,6 +373,7 @@ describe("AI UI asynchronous request lifecycle", function()
         local recommendHs, recommendUI = makeRecommendHs()
         rawset(_G, "hs", recommendHs)
         require("ai.recommend").open()
+        recommendUI.webviews[1].navigation("didFinishNavigation")
         openai.callbacks[1](nil, upstreamError)
         local recommendationScript = recommendUI.webviews[1].evaluations[#recommendUI.webviews[1].evaluations]
         assert.matches("Could not get a response from AI", recommendationScript, 1, true)

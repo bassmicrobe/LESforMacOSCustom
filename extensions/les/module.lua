@@ -113,7 +113,10 @@ function module.init(self)
 
   -- Step 4: Load settings
   ---------------------------------------------------------------------
-  settingsManager:init()
+  if settingsManager:init() == false then
+    panicExit(L("settings_load_failed"))
+    return false
+  end
   settingsManager:parse()
   -- Map to values to global keys
   -- TODO: Get rid of this once all values are queried with getVal

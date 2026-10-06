@@ -75,3 +75,6 @@ jobs:
 
       - name: Run Lua checks
         run: docker run --rm les-lua-test
+
+      - name: Verify webview keyboard interactions
+        run: node --test extensions/les/tests/ui_keyboard_spec.mjs

@@ -13,7 +13,7 @@ PODS:
     - PocketSocket/Core
   - PocketSocket/Core (1.0.1)
   - SocketRocket (0.7.0)
-  - Sparkle (2.6.4)
+  - Sparkle (2.9.6)
 
 DEPENDENCIES:
   - ASCIImage (= 1.0.0)
@@ -24,7 +24,7 @@ DEPENDENCIES:
   - ORSSerialPort (= 2.1.0)
   - PocketSocket/Client (= 1.0.1)
   - SocketRocket (= 0.7.0)
-  - Sparkle (= 2.6.4)
+  - Sparkle (= 2.9.6)
 
 SPEC REPOS:
   https://github.com/CocoaPods/Specs.git:
@@ -55,8 +55,8 @@ SPEC CHECKSUMS:
   ORSSerialPort: d2d5d131797453430c557ba8dc7dcbcae20ff2e5
   PocketSocket: 9c6867d66fb4f962af96b9b07f4b45bb561b2c2a
   SocketRocket: abac6f5de4d4d62d24e11868d7a2f427e0ef940d
-  Sparkle: 5f8960a7a119aa7d45dacc0d5837017170bc5675
+  Sparkle: b8c9cf4ced217ffc708a1ca5f988a7ba877658db
 
-PODFILE CHECKSUM: 1053e96e6067e82cc7b594381d21166f103cf986
+PODFILE CHECKSUM: 33b0581253cad67adaf1292c69ae10297d93124b
 
 COCOAPODS: 1.16.2

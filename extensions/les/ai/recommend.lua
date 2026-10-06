@@ -125,13 +125,13 @@ button.send:disabled { background: #3a3a3c; color: #a1a1a6; cursor: wait; }
   <div class="loading">__LOADING_STATS__</div>
 </div>
 <div class="input-area">
-  <textarea id="inp" placeholder="__EXTRA_PLACEHOLDER__" rows="1"
+  <textarea id="inp" placeholder="__EXTRA_PLACEHOLDER__" rows="1" disabled
     maxlength="__MAX_EXTRA_CODE_UNITS__" aria-label="__EXTRA_LABEL__"
-    onkeydown="if(event.key==='Enter'&&event.metaKey){event.preventDefault();ask();}"></textarea>
-  <button id="send" type="button" class="send" onclick="ask()">__AGAIN_HTML__</button>
+    onkeydown="if(!event.isComposing&&event.keyCode!==229&&event.key==='Enter'&&event.metaKey){event.preventDefault();ask();}"></textarea>
+  <button id="send" type="button" class="send" onclick="ask()" disabled>__PENDING_HTML__</button>
 </div>
 <script>
-var requestPending = false;
+var requestPending = true;
 var pendingExtra = null;
 var maxExtraLength = __MAX_EXTRA_LENGTH__;
 function charLength(value) { return Array.from(value).length; }
@@ -223,7 +223,7 @@ function ask() {
         LOADING_STATS = htmlEscape(L("recommend_loading_stats")),
         EXTRA_PLACEHOLDER = htmlEscape(L("recommend_extra_placeholder")),
         EXTRA_LABEL = htmlEscape(L("recommend_extra_label")),
-        AGAIN_HTML = htmlEscape(L("recommend_again")),
+        PENDING_HTML = htmlEscape(L("recommend_pending")),
         AGAIN_JS = jsEscape(L("recommend_again")),
         PENDING_JS = jsEscape(L("recommend_pending")),
         LOADING_AI_JS = jsEscape(L("recommend_loading_ai")),
@@ -326,7 +326,6 @@ function recommend.open(extra)
     _webview:windowStyle({ "titled", "closable", "resizable" })
     _webview:windowTitle(L("recommend_title"))
     _webview:allowTextEntry(true)
-    _webview:html(buildHTML())
     _webview:deleteOnClose(true)
     local requestWebview = _webview
     _webview:windowCallback(function(action)
@@ -337,19 +336,25 @@ function recommend.open(extra)
             _uc = nil
         end
     end)
+    -- Wait for the document's functions to exist before starting a request.
+    -- Fast validation/network replies must not disappear into an unloaded page.
+    local initialExtra = type(extra) == "string" and extra or ""
+    local initialRequestStarted = false
+    _webview:navigationCallback(function(action)
+        if action ~= "didFinishNavigation" or initialRequestStarted or _webview ~= requestWebview then return end
+        initialRequestStarted = true
+        if not utf8text.isWithinLimit(initialExtra, MAX_EXTRA_LENGTH) then
+            local errorMessage = string.format(L("recommend_input_too_long"), MAX_EXTRA_LENGTH)
+            requestWebview:evaluateJavaScript(string.format(
+                "setError('%s');recommendRequestResult(false);",
+                jsEscape(errorMessage)))
+            return
+        end
+        fetchRecommendations(initialExtra)
+    end)
+    _webview:html(buildHTML())
     _webview:show()
     _webview:bringToFront()
-
-    -- Auto-fetch on open
-    local initialExtra = type(extra) == "string" and extra or ""
-    if not utf8text.isWithinLimit(initialExtra, MAX_EXTRA_LENGTH) then
-        local errorMessage = string.format(L("recommend_input_too_long"), MAX_EXTRA_LENGTH)
-        _webview:evaluateJavaScript(string.format(
-            "setError('%s');recommendRequestResult(false);",
-            jsEscape(errorMessage)))
-        return
-    end
-    fetchRecommendations(initialExtra)
 end
 
 return recommend

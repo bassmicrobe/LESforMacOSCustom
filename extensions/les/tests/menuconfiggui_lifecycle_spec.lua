@@ -21,8 +21,11 @@ local function createHarness(options)
     local userContentCallbacks = {}
     local liveBuildCalls = 0
     local liveRefreshCalls = 0
+    local scanCallbacks = {}
+    local directoryState = {}
+    local iterated = false
 
-    local decodedMessage = {
+    local decodedMessage = options.message or {
         action = "save",
         data = {
             categories = {
@@ -33,9 +36,18 @@ local function createHarness(options)
     }
 
     local hsMock = {
-        fs = {},
+        fs = {dir = function()
+            return function(state)
+                assert.are.equal(directoryState, state)
+                iterated = true
+                return nil
+            end, directoryState
+        end},
         json = {
-            decode = function() return decodedMessage end,
+            decode = function()
+                if options.decodeError then error("Invalid JSON") end
+                return decodedMessage
+            end,
         },
         screen = {
             mainScreen = function()
@@ -81,7 +93,8 @@ local function createHarness(options)
         webview.windowStyle = chain
         function webview:windowTitle(value) self.title = value return self end
         webview.allowTextEntry = chain
-        webview.html = chain
+        function webview:html(value) self.htmlValue = value return self end
+        function webview:navigationCallback(callback) self.navigation = callback return self end
         webview.show = chain
         function webview:bringToFront()
             self.bringCount = self.bringCount + 1
@@ -112,8 +125,15 @@ local function createHarness(options)
         ScriptUserPath = FIXTURE_DIR,
         programName = "LES Test",
         HSMakeAlert = function() end,
-        ShellCopy = function() return true end,
-        ioIsFilePresent = function() return false end,
+        ShellCopy = function() return not options.backupFails end,
+        ioIsFilePresent = function() return options.backupFails == true or options.backupExists == true end,
+        io = {open = function(path, mode)
+            if options.writeFails and path == FIXTURE_PATH .. ".tmp" and mode == "w" then
+                local file = assert(io.open(path, mode))
+                return {write = function() return nil, "disk full" end, close = function() return file:close() end}
+            end
+            return io.open(path, mode)
+        end},
         strJoinPaths = function(left, right) return left .. "/" .. right end,
         buildPluginMenu = function()
             liveBuildCalls = liveBuildCalls + 1
@@ -135,7 +155,13 @@ local function createHarness(options)
                 }
             end
             if name == "vst.scanner" then
-                return { scanVST3 = function() return {} end }
+                return {
+                    scanVST3 = function() error("UI must not scan synchronously") end,
+                    scanVST3Async = function(callback)
+                        scanCallbacks[#scanCallbacks + 1] = callback
+                        return true
+                    end,
+                }
             end
             return require(name)
         end,
@@ -149,6 +175,8 @@ local function createHarness(options)
         environment = environment,
         scheduled = scheduled,
         webviews = webviews,
+        scans = scanCallbacks,
+        iterated = function() return iterated end,
         callback = function() return userContentCallbacks[#userContentCallbacks] end,
         liveBuildCalls = function() return liveBuildCalls end,
         liveRefreshCalls = function() return liveRefreshCalls end,
@@ -167,6 +195,107 @@ local function readSource()
 end
 
 describe("menu configuration editor lifecycle", function()
+    it("shows the editor before scanning and updates only the plugin picker", function()
+        local harness = createHarness()
+        harness.environment.openMenuConfigGUI()
+        local view = harness.webviews[1]
+        assert.is_truthy(view.htmlValue:find("Ableton", 1, true))
+        assert.are.equal(0, #harness.scans)
+        assert.is_function(view.navigation)
+        view.navigation("didFinishNavigation")
+        assert.are.equal(1, #harness.scans)
+        harness.scans[1]({{name = "Test VST3", category = "FX"}})
+        assert.is_truthy(lastScript(view):find("setAvailablePlugins(", 1, true))
+        assert.is_truthy(lastScript(view):find("Test VST3", 1, true))
+    end)
+
+    it("ignores an old scan result after the editor is closed and reopened", function()
+        local harness = createHarness()
+        harness.environment.openMenuConfigGUI()
+        local oldView = harness.webviews[1]
+        assert.is_function(oldView.navigation)
+        oldView.navigation("didFinishNavigation")
+        oldView.closeCallback("closing")
+        harness.environment.openMenuConfigGUI()
+        harness.scans[1]({{name = "Stale VST3", category = "FX"}})
+        assert.are.equal(0, #oldView.evaluatedScripts)
+        assert.are.equal(0, #harness.webviews[2].evaluatedScripts)
+    end)
+
+    it("keeps the original and removes the temporary file after a write failure", function()
+        local harness = createHarness({writeFails = true})
+        harness.environment.openMenuConfigGUI()
+        harness.callback()({body = "save"})
+        local file = assert(io.open(FIXTURE_PATH, "r"))
+        local content = file:read("*a")
+        file:close()
+        assert.are.equal('/Effects\nDelay\n"Delay"\n\nEnd\n', content)
+        assert.is_nil(io.open(FIXTURE_PATH .. ".tmp", "r"))
+        assert.is_truthy(lastScript(harness.webviews[1]):find("saveResult(false", 1, true))
+        assert.are.equal(0, harness.liveBuildCalls())
+    end)
+
+    it("passes the directory state while pruning backups before a successful save", function()
+        local harness = createHarness({backupExists = true})
+        harness.environment.openMenuConfigGUI()
+        assert.has_no.errors(function() harness.callback()({body = "save"}) end)
+        assert.is_true(harness.iterated())
+        assert.is_truthy(lastScript(harness.webviews[1]):find("saveResult(true", 1, true))
+        assert.are.equal(1, harness.liveBuildCalls())
+    end)
+
+    it("shows a scan error without replacing the editor or its draft", function()
+        local harness = createHarness()
+        harness.environment.openMenuConfigGUI()
+        local view = harness.webviews[1]
+        view.navigation("didFinishNavigation")
+        harness.scans[1](nil, "directory read failed")
+        assert.is_truthy(lastScript(view):find("directory read failed", 1, true))
+        assert.is_truthy(lastScript(view):find("setAvailablePlugins([]", 1, true))
+        assert.is_false(view.deleted)
+    end)
+
+    it("rejects malformed messages without overwriting the existing file", function()
+        for _, message in ipairs({
+            {action = "save", data = {categories = {4}, nocategory = {}}},
+            {action = "save", data = {categories = {{name = "/Nested", plugins = {}}}, nocategory = {}}},
+            {action = "save", data = {categories = {{name = "nocategory", plugins = {}}}, nocategory = {}}},
+            {action = "save", data = {categories = {{name = "FX\nEnd", plugins = {}}}, nocategory = {}}},
+            {action = "save", data = {categories = {}, nocategory = {{name = "Delay", query = "Delay\nEnd"}}}},
+            {action = "save", data = {categories = {}}},
+        }) do
+            local harness = createHarness({message = message})
+            harness.environment.openMenuConfigGUI()
+            assert.has_no.errors(function() harness.callback()({body = "save"}) end)
+            local file = assert(io.open(FIXTURE_PATH, "r"))
+            local content = file:read("*a")
+            file:close()
+            assert.are.equal('/Effects\nDelay\n"Delay"\n\nEnd\n', content)
+            assert.are.equal(0, harness.liveBuildCalls())
+            assert.is_truthy(lastScript(harness.webviews[1]):find("saveResult(false", 1, true))
+        end
+    end)
+
+    it("reports a malformed JSON message immediately", function()
+        local harness = createHarness({decodeError = true})
+        harness.environment.openMenuConfigGUI()
+        assert.has_no.errors(function() harness.callback()({body = "bad json"}) end)
+        assert.is_truthy(lastScript(harness.webviews[1]):find("saveResult(false", 1, true))
+        assert.are.equal(0, harness.liveBuildCalls())
+    end)
+
+    it("preserves the original when its required backup fails", function()
+        local harness = createHarness({backupFails = true})
+        harness.environment.openMenuConfigGUI()
+        harness.callback()({body = "save"})
+        local file = assert(io.open(FIXTURE_PATH, "r"))
+        local content = file:read("*a")
+        file:close()
+        assert.are.equal('/Effects\nDelay\n"Delay"\n\nEnd\n', content)
+        assert.is_truthy(lastScript(harness.webviews[1]):find("saveResult(false", 1, true))
+        assert.are.equal(0, harness.liveBuildCalls())
+    end)
+
     it("keeps the editor open after saving so later edits cannot be discarded by a close timer", function()
         local harness = createHarness()
         harness.environment.openMenuConfigGUI()

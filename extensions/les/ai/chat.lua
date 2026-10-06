@@ -162,6 +162,7 @@ function resizeTA(el) {
     el.style.height = Math.min(el.scrollHeight, 110) + 'px';
 }
 function onKey(e) {
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter' && e.metaKey) { e.preventDefault(); send(); }
 }
 function send() {

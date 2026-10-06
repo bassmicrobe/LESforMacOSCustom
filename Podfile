@@ -13,7 +13,7 @@ pod 'CocoaLumberjack', '3.8.5'
 pod 'CocoaAsyncSocket', '7.6.5'
 pod 'CocoaHTTPServer', :git => 'https://github.com/Hammerspoon/CocoaHTTPServer.git'
 pod 'PocketSocket/Client', '1.0.1'
-pod 'Sparkle', '2.6.4', :configurations => ['Release']
+pod 'Sparkle', '2.9.6', :configurations => ['Release']
 pod 'MIKMIDI', '1.7.1'
 pod 'SocketRocket', '0.7.0'
 pod 'ORSSerialPort', '2.1.0'

@@ -4,6 +4,8 @@
 local menuConfigWebview = nil
 local menuConfigUC = nil
 local windowframe = require("util.windowframe")
+local validation = require("util.menuconfigvalidation")
+local ABLETON_CATEGORIES = require("menus.builtindevices")
 
 local function readMenuConfig()
     local path = strJoinPaths(ScriptUserPath, "menuconfig.ini")
@@ -21,27 +23,28 @@ local function writeMenuConfig(content)
     -- subcategories or separators. Keep the 5 most recent backups.
     if ioIsFilePresent(path) and type(ShellCopy) == "function" then
         local backupPath = string.format("%s.%d.bak", path, math.floor(hs.timer.secondsSinceEpoch()))
-        ShellCopy(path, backupPath)
+        if not ShellCopy(path, backupPath) then return false end
         -- Index hs.fs inside the pcall closure so a missing hs.fs is caught.
-        local ok, iter = pcall(function() return hs.fs.dir(ScriptUserPath) end)
-        if ok and iter then
+        local ok, cleanupError = pcall(function()
             local baks = {}
-            for file in iter do
+            for file in hs.fs.dir(ScriptUserPath) do
                 if type(file) == "string" and file:match("^menuconfig%.ini%.%d+%.bak$") then
                     baks[#baks + 1] = file
                 end
             end
             table.sort(baks)
             for i = 1, #baks - 5 do os.remove(strJoinPaths(ScriptUserPath, baks[i])) end
-        end
+        end)
+        if not ok then print("[menuconfiggui] backup cleanup failed: " .. tostring(cleanupError)) end
     end
 
     -- Atomic write with temp-file cleanup on any failure.
     local tmpPath = path .. ".tmp"
     local f = io.open(tmpPath, "w")
     if not f then return false end
-    f:write(content)
-    if not f:close() then
+    local written = f:write(content)
+    local closed = f:close()
+    if not written or not closed then
         os.remove(tmpPath)
         return false
     end
@@ -119,35 +122,6 @@ local function buildDataJson(data)
     return string.format('{"comments":%s,"categories":[%s],"nocategory":%s}',
         commentsJson, table.concat(catParts, ","), nocatJson)
 end
-
--- Ableton Live built-in devices grouped by category
-local ABLETON_CATEGORIES = {
-    {
-        name = "Ableton Audio FX",
-        devices = {
-            "Amp", "Auto Filter", "Auto Pan", "Beat Repeat", "Cabinet", "Chorus",
-            "Compressor", "Corpus", "Delay", "Dynamic Tube", "Echo", "EQ Eight",
-            "EQ Three", "Erosion", "Filter Delay", "Flanger", "Frequency Shifter",
-            "Gate", "Glue Compressor", "Grain Delay", "Limiter", "Looper",
-            "Multiband Dynamics", "Overdrive", "Pedal", "Phaser", "Redux",
-            "Resonators", "Reverb", "Roar", "Saturator", "Spectrum", "Tuner",
-            "Utility", "Vinyl Distortion", "Vocoder",
-        },
-    },
-    {
-        name = "Ableton Instruments",
-        devices = {
-            "Analog", "Collision", "Drift", "Electric", "Impulse", "Meld",
-            "Operator", "Poli", "Sampler", "Simpler", "Tension",
-        },
-    },
-    {
-        name = "Ableton MIDI FX",
-        devices = {
-            "Arpeggiator", "Chord", "Note Length", "Pitch", "Random", "Scale", "Velocity",
-        },
-    },
-}
 
 -- Build JSON array for available-plugins picker (includes format field)
 local function buildAvailableJson(plugins)
@@ -381,6 +355,7 @@ button:disabled{opacity:.45;cursor:default}
 var state=JSON.parse(']], dataLiteral, [[');
 var vst3All=JSON.parse(']], vst3Literal, [[');
 var i18n=]], i18nLiteral, [[;
+vst3All=vst3All.slice().sort(function(a,b){return a.name.localeCompare(b.name);});
 var sel=state.categories.length>0?0:-1;
 var dsrc=-1;
 var dirty=false;
@@ -583,6 +558,11 @@ function closePicker(){
   if(lastPickerFocus&&document.contains(lastPickerFocus))lastPickerFocus.focus();
   lastPickerFocus=null;
 }
+function setAvailablePlugins(plugins,error){
+  vst3All=vst3All.concat(plugins).sort(function(a,b){return a.name.localeCompare(b.name);});
+  document.getElementById('pickerStatus').textContent=error||'';
+  renderPicker(document.getElementById('pickerSearch').value);
+}
 function renderPicker(q){
   var q2=q.toLowerCase().trim();
   var already={};
@@ -591,7 +571,6 @@ function renderPicker(q){
     return !already[p.name]&&(q2===''||p.name.toLowerCase().indexOf(q2)>=0||
       (p.category||'').toLowerCase().indexOf(q2)>=0);
   });
-  filtered.sort(function(a,b){return a.name.localeCompare(b.name);});
   var h='';
   if(!filtered.length){h='<div id="pickerNone">'+escH(i18n.pickerEmpty)+'</div>';}
   else{filtered.forEach(function(p){
@@ -655,6 +634,7 @@ render();setSaveEnabled();
         "<div id='picker' role='dialog' aria-modal='true' aria-hidden='true' aria-labelledby='pickerTitle'><div id='pickerBox'>",
         "<div id='pickerHdr'><span id='pickerTitle'>" .. escapeHtml(L("menuconfig_picker_title")) .. "</span><button type='button' id='pickerClose' aria-label='" .. escapeHtml(L("menuconfig_close_label")) .. "' onclick='closePicker()'>&#x2715;</button></div>",
         "<input id='pickerSearch' type='search' aria-label='" .. escapeHtml(L("menuconfig_search_label")) .. "' placeholder='" .. escapeHtml(L("menuconfig_search_placeholder")) .. "' oninput='renderPicker(this.value)'>",
+        "<div id='pickerStatus' role='status' aria-live='polite'>" .. escapeHtml(L("scanner_detecting_vst3")) .. "</div>",
         "<div id='pickerList' role='listbox'></div>",
         "</div></div>",
         "<script>", js, "</script>",
@@ -703,30 +683,22 @@ function openMenuConfigGUI()
         if type(msg) == "table" and msg.body ~= nil then
             bodyRaw = msg.body
         end
-        if type(bodyRaw) ~= "string" then return end
-        local body = hs.json.decode(bodyRaw)
-        if not body then return end
+        local decoded, body = pcall(hs.json.decode, bodyRaw)
+        if not decoded or type(body) ~= "table" then
+            if menuConfigWebview then
+                menuConfigWebview:evaluateJavaScript("saveResult(false," .. jsLiteral(L("settings_validation_failed")) .. ")")
+            end
+            return
+        end
         local action = body.action
         if action == "save" then
-            local dataObj = body.data
-            if type(dataObj) ~= "table" then return end
-            local function arr(t) return type(t) == "table" and t or {} end
-            local function str(v) return type(v) == "string" and v or "" end
-            local cats = {}
-            for _, c in ipairs(arr(dataObj.categories)) do
-                local ps = {}
-                for _, p in ipairs(arr(c.plugins)) do
-                    ps[#ps + 1] = {name = str(p.name), query = str(p.query)}
+            local newData = validation.normalize(body.data, parsedData.comments)
+            if not newData then
+                if menuConfigWebview then
+                    menuConfigWebview:evaluateJavaScript("saveResult(false," .. jsLiteral(L("settings_validation_failed")) .. ")")
                 end
-                cats[#cats + 1] = {name = str(c.name), plugins = ps}
+                return
             end
-            local nocat = {}
-            for _, p in ipairs(arr(dataObj.nocategory)) do
-                nocat[#nocat + 1] = {name = str(p.name), query = str(p.query)}
-            end
-            -- Preserve original file comments (JS doesn't modify them)
-            local comts = parsedData.comments
-            local newData = {comments = comts, categories = cats, nocategory = nocat}
             local newContent = serializeMenuConfig(newData)
             local ok = writeMenuConfig(newContent)
             local wv = menuConfigWebview
@@ -779,11 +751,23 @@ function openMenuConfigGUI()
         end
     end)
     menuConfigWebview:allowTextEntry(true)
-    -- Scan VST3 plugins for picker
-    local scanner = require("vst.scanner")
+    -- Show built-ins immediately, then load disk-backed entries after the page
+    -- is ready. The scanner yields between batches to keep the editor usable.
     local availablePlugins = {}
-    local scanOk, scanResult = pcall(scanner.scanVST3)
-    if scanOk and type(scanResult) == "table" then availablePlugins = scanResult end
+    local scanStarted = false
+    menuConfigWebview:navigationCallback(function(action)
+        if action ~= "didFinishNavigation" or scanStarted or menuConfigWebview ~= currentWebview then return end
+        scanStarted = true
+        local function scanned(plugins, scanError)
+            if menuConfigWebview ~= currentWebview then return end
+            local message = scanError and string.format(L("scanner_vst3_error"), tostring(scanError)) or ""
+            local script = "setAvailablePlugins(" .. buildAvailableJson(plugins or {}) .. "," .. jsLiteral(message) .. ")"
+            currentWebview:evaluateJavaScript(script)
+        end
+        local scanner = require("vst.scanner")
+        local ok, started, startError = pcall(scanner.scanVST3Async, scanned)
+        if not ok or not started then scanned(nil, ok and startError or started) end
+    end)
     -- Append Ableton built-ins to picker list
     for _, abcat in ipairs(ABLETON_CATEGORIES) do
         for _, devName in ipairs(abcat.devices) do

@@ -12,6 +12,8 @@
 
 function disablemacros() -- this function stops all of the eventtap events, causing the shortcuts to be disabled.
     threadsenabled = false
+    if type(_G.cancelPendingPluginLoad) == "function" then _G.cancelPendingPluginLoad() end
+    if type(_G.cancelPendingSaveAs) == "function" then _G.cancelPendingSaveAs() end
     if dingodango then
         dingodango:stop()
     end

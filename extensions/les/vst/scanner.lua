@@ -18,6 +18,9 @@
 
 local scanner = {}
 local MAX_MODULEINFO_BYTES = 4 * 1024 * 1024
+local VST3_SCAN_BATCH_SIZE = 12
+local VST3_SCAN_YIELD_SECONDS = 0.01
+local VST3_SCAN_BUDGET_NANOSECONDS = 8 * 1000 * 1000
 local windowframe = require("util.windowframe")
 
 ---@type hs.webview|nil
@@ -417,9 +420,20 @@ function scanner.scanAUAsync(callback)
     return taskOrError
 end
 
---- Scan VST3 plugins by reading moduleinfo.json from .vst3 bundles.
----@return table
-function scanner.scanVST3()
+-- Locate literal keys in C before applying a small anchored Lua pattern. Running
+-- three unanchored patterns across each 4 MiB file can monopolize the run loop.
+local function metadataValue(raw, key, valuePattern)
+    local offset = 1
+    while true do
+        local _, keyEnd = raw:find('"' .. key .. '"', offset, true)
+        if not keyEnd then return nil end
+        local value = raw:match("^%s*:%s*" .. valuePattern, keyEnd + 1)
+        if value then return value end
+        offset = keyEnd + 1
+    end
+end
+
+local function collectVST3Plugins(yieldEntry)
     local results = {}
     local searchPaths = {
         "/Library/Audio/Plug-Ins/VST3",
@@ -443,9 +457,9 @@ function scanner.scanVST3()
                         local raw = mf:read(MAX_MODULEINFO_BYTES + 1)
                         mf:close()
                         if raw and #raw <= MAX_MODULEINFO_BYTES then
-                            local subcat = raw:match('"sub_categories"%s*:%s*"([^"]+)"')
-                                or raw:match('"subcategories"%s*:%s*%[%s*"([^"]+)"')
-                                or raw:match('"category"%s*:%s*"([^"]+)"')
+                            local subcat = metadataValue(raw, "sub_categories", '"([^"]+)"')
+                                or metadataValue(raw, "subcategories", '%[%s*"([^"]+)"')
+                                or metadataValue(raw, "category", '"([^"]+)"')
                             category = scanner.classifyByVST3Subcat(subcat)
                         end
                     end
@@ -460,10 +474,50 @@ function scanner.scanVST3()
                         category = category,
                     })
                 end
+                if yieldEntry then yieldEntry() end
             end
         end
     end
     return results
+end
+
+--- Scan VST3 plugins synchronously. Retained for non-UI callers.
+---@return table
+function scanner.scanVST3()
+    return collectVST3Plugins()
+end
+
+--- Scan VST3 metadata in bounded batches so windows and hotkeys remain responsive.
+---@param callback fun(results: table|nil, err: string|nil)
+---@return boolean started
+---@return string|nil err
+function scanner.scanVST3Async(callback)
+    if type(callback) ~= "function" then return false, "VST3 scan callback must be a function" end
+    if not hs.timer or type(hs.timer.doAfter) ~= "function" then
+        return false, "hs.timer is unavailable"
+    end
+    local worker = coroutine.create(function()
+        return collectVST3Plugins(coroutine.yield)
+    end)
+    local monotonicTime = type(hs.timer.absoluteTime) == "function" and hs.timer.absoluteTime or nil
+    local function step()
+        local startedAt = monotonicTime and monotonicTime()
+        for _ = 1, VST3_SCAN_BATCH_SIZE do
+            local ok, result = coroutine.resume(worker)
+            if not ok then
+                callback(nil, tostring(result))
+                return
+            end
+            if coroutine.status(worker) == "dead" then
+                callback(result, nil)
+                return
+            end
+            if startedAt and monotonicTime() - startedAt >= VST3_SCAN_BUDGET_NANOSECONDS then break end
+        end
+        hs.timer.doAfter(VST3_SCAN_YIELD_SECONDS, step)
+    end
+    hs.timer.doAfter(0, step)
+    return true
 end
 
 -- ═══════════════════════════════════════════════════════════════════════
@@ -536,7 +590,8 @@ local function computeDiffAndUpdateCache(cache, current)
         scanned_at = math.floor(hs.timer.secondsSinceEpoch()),
     })
 
-    local cacheError = cacheSaved and nil or "plugin cache write failed"
+    local cacheError
+    if not cacheSaved then cacheError = "plugin cache write failed" end
     return added, removed, current, cacheError
 end
 
@@ -633,7 +688,8 @@ local function getExistingPluginNames()
         if type(line) ~= "string" then goto continue end
         -- Skip comments, categories, separators, control lines
         if line:match("^%s*;") or line:match("^%s*$") or line:match("^/")
-           or line:match("^%.%.") or line:match("^%-%-") or line:match("^End")
+           or line:match("^%.%.") or line:match("^%-%-") or line:match("^%s*End%s*$")
+           or line:match("^%s*End%s*;")
            or line:match('^"') then
             goto continue
         end
@@ -678,7 +734,7 @@ function scanner.appendToMenuconfig(newPlugins)
     -- Find the "End" marker line index
     local endIdx = nil
     for i = #menuLines, 1, -1 do
-        if menuLines[i] and menuLines[i]:find("^End") then
+        if menuLines[i] and (menuLines[i]:match("^%s*End%s*$") or menuLines[i]:match("^%s*End%s*;")) then
             endIdx = i
             break
         end
@@ -730,12 +786,14 @@ function scanner.appendToMenuconfig(newPlugins)
 
     add("/nocategory")
 
-    -- Insert before End marker
-    for i = #insertLines, 1, -1 do
-        table.insert(menuLines, endIdx, insertLines[i])
-    end
+    -- Build once instead of shifting all prior insertions for every new line.
+    -- Preserve both the original prefix and any comments after the End marker.
+    local mergedLines = {}
+    for i = 1, endIdx - 1 do mergedLines[#mergedLines + 1] = menuLines[i] end
+    for _, line in ipairs(insertLines) do mergedLines[#mergedLines + 1] = line end
+    for i = endIdx, #menuLines do mergedLines[#mergedLines + 1] = menuLines[i] end
 
-    local writeCallOK, persisted = pcall(tableToFile, GetDataPath(MenuConfigFile), menuLines)
+    local writeCallOK, persisted = pcall(tableToFile, GetDataPath(MenuConfigFile), mergedLines)
     if not writeCallOK or persisted ~= true then
         return nil, "menuconfig write failed"
     end
@@ -940,8 +998,15 @@ function scanner.scanAndPrompt()
                 hs.timer.doAfter(0.08, function()
                     local ok2, err2 = pcall(function()
                         setScanProgress(44, localized("scanner_detecting_vst3", "VST3 バンドルを検出中…"))
-                        local vst3Plugins = scanner.scanVST3()
-                        hs.timer.doAfter(0.08, function()
+                        local started, vst3StartError = scanner.scanVST3Async(function(vst3Plugins, vst3Error)
+                            if vst3Error then
+                                scanInProgress = false
+                                closeScanProgress()
+                                HSMakeAlert(programName, localizedFormat(
+                                    "scanner_vst3_error", "VST3 スキャンでエラー:\n%s", vst3Error),
+                                    true, "critical")
+                                return
+                            end
                             local ok3, err3 = pcall(function()
                                 setScanProgress(78, localized("scanner_updating_cache", "統合とキャッシュを更新…"))
                                 local merged = mergePluginLists(auPlugins, vst3Plugins)
@@ -971,6 +1036,7 @@ function scanner.scanAndPrompt()
                                     true, "critical")
                             end
                         end)
+                        if not started then error(vst3StartError) end
                     end)
                     if not ok2 then
                         scanInProgress = false

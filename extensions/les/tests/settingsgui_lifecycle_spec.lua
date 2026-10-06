@@ -121,6 +121,7 @@ local function makeHarness(options)
     local manager = {autoadd = {value = "1"}}
     function manager.writeFromGui()
         state.writes = state.writes + 1
+        if options.writeError then error("write failed") end
         return options.writeResult ~= false
     end
     for _, methodName in ipairs({"init", "parse", "map"}) do
@@ -265,21 +266,32 @@ describe("settings webview lifecycle", function()
         assert.matches("ファイル保存済み", view.evaluations[#view.evaluations], 1, true)
     end)
 
-    it("closes only after persistence and runtime application both succeed", function()
+    it("keeps the panel open after success so subsequent edits cannot be discarded", function()
         local state = makeHarness()
         openSettingsGUI()
 
         sendSave(state)
 
         local view = state.webviews[1]
-        assert.are.equal(1, #state.timers)
+        assert.are.equal(0, #state.timers)
         assert.are.equal(1, #state.notifications)
         assert.matches("ファイル保存済み／反映中", view.evaluations[1], 1, true)
         assert.matches("saveResult%(true", view.evaluations[#view.evaluations])
         assert.is_false(view.deleted)
 
-        state.timers[1].callback()
-        assert.is_true(view.deleted)
+    end)
+
+    it("reports a write exception immediately and preserves the draft", function()
+        local state = makeHarness({writeError = true})
+        openSettingsGUI()
+
+        assert.has_no.errors(function() sendSave(state) end)
+
+        local view = state.webviews[1]
+        assert.matches("saveResult%(false", view.evaluations[#view.evaluations])
+        assert.are.equal(0, state.reloadCalls)
+        assert.are.equal(0, #state.timers)
+        assert.is_false(view.deleted)
     end)
 
     it("localizes the window title and partial-success messages in English", function()

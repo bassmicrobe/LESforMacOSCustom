@@ -73,6 +73,7 @@ local function recommendRequestCount(extra, asInitialContext)
     }) do
         webview[method] = function(self) return self end
     end
+    function webview:navigationCallback(callback) self.navigation = callback return self end
 
     local hs = {
         screen = {
@@ -115,6 +116,7 @@ local function recommendRequestCount(extra, asInitialContext)
     })
 
     recommend.open(asInitialContext and extra or nil)
+    webview.navigation("didFinishNavigation")
     if asInitialContext then return #requests end
     callbacks[1]("ready", nil)
     usercontent.callback({ body = { action = "ask", extra = extra } })

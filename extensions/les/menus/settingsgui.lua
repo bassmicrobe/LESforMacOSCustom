@@ -9,7 +9,6 @@
 -- HTML/CSS settings panel replacing direct settings.ini editing.
 local settingsWebview = nil
 local settingsUC = nil
-local pendingReloadTimer = nil
 local windowframe = require("util.windowframe")
 
 local function sLog(msg)
@@ -236,7 +235,10 @@ local function buildSettingsHTML()
     local js = table.concat({
         "var dirty = false;",
         "var saving = false;",
+        "var editRevision = 0;",
+        "var savingRevision = null;",
         "function markDirty() {",
+        "  editRevision += 1;",
         "  setDirty(true);",
         "}",
         "// API-key clear affordance: a blank field means 'keep existing',",
@@ -290,10 +292,14 @@ local function buildSettingsHTML()
         "function saveResult(ok, message) {",
         "  // Bump the save token so a real Lua reply cancels any pending watchdog timer.",
         "  window._saveTok = (window._saveTok||0)+1;",
+        "  var hasNewerEdits = ok && savingRevision !== editRevision;",
         "  saving = false;",
+        "  savingRevision = null;",
         "  if (ok) {",
-        "    showToast(message || " .. jsLiteral(L("settings_save_success")) .. ", true);",
-        "    setDirty(false);",
+        "    var status = message || " .. jsLiteral(L("settings_save_success")) .. ";",
+        "    if (hasNewerEdits) status += " .. jsLiteral(L("menuconfig_newer_edits_suffix")) .. ";",
+        "    showToast(status, true);",
+        "    setDirty(hasNewerEdits);",
         "  } else {",
         "    showToast(message || " .. jsLiteral(L("settings_save_failed")) .. ", false);",
         "    setDirty(true);",
@@ -315,8 +321,9 @@ local function buildSettingsHTML()
         "    }",
         "  });",
         "  // Always stringify: WKWebView → Lua is most reliable as JSON text (nested dicts can break pairs()/keys).",
-        "  window.webkit.messageHandlers.lesmessages.postMessage(JSON.stringify({ action: 'save', data: settings }));",
         "  saving = true;",
+        "  savingRevision = editRevision;",
+        "  setDirty(dirty);",
         "  // Neutral 'saving' state; the Lua callback reports success/failure via saveResult().",
         "  var btn = document.getElementById('saveBtn');",
         "  if (btn) { btn.classList.add('opacity-40', 'pointer-events-none'); btn.classList.remove('opacity-100', 'cursor-pointer'); }",
@@ -325,6 +332,8 @@ local function buildSettingsHTML()
         "  // A real Lua reply bumps window._saveTok via saveResult(), which cancels this.",
         "  window._saveTok = (window._saveTok||0)+1; var t = window._saveTok;",
         "  setTimeout(function(){ if (window._saveTok === t) saveResult(false, " .. jsLiteral(L("settings_no_response")) .. "); }, 5000);",
+        "  try { window.webkit.messageHandlers.lesmessages.postMessage(JSON.stringify({ action: 'save', data: settings })); }",
+        "  catch (e) { saveResult(false, " .. jsLiteral(L("settings_no_response")) .. "); }",
         "}",
         "window.addEventListener('beforeunload', function(e) { if (dirty && !saving) { e.preventDefault(); e.returnValue = ''; } });",
     }, "\n")
@@ -601,11 +610,6 @@ end
 --- Open the settings GUI webview panel.
 --- Saves via settingsManager:writeFromGui() then calls reloadLES().
 function openSettingsGUI()
-    -- Cancel any pending teardown so reopening within the reload window is never destroyed.
-    if pendingReloadTimer ~= nil then
-        pcall(function() pendingReloadTimer:stop() end)
-        pendingReloadTimer = nil
-    end
     -- Preserve unsaved form values when the settings command is invoked again.
     -- If the native object is stale, fall through and recreate it safely.
     if settingsWebview ~= nil then
@@ -702,9 +706,9 @@ function openSettingsGUI()
         )
         if settingsManager and next(patch) ~= nil then
             print("[settingsgui] save: calling writeFromGui with", patchCount, "keys")
-            local okWrite = settingsManager:writeFromGui(patch)
-            sLog("writeFromGui result=" .. tostring(okWrite))
-            if not okWrite then
+            local writeCallOk, okWrite = pcall(settingsManager.writeFromGui, settingsManager, patch)
+            sLog("writeFromGui succeeded=" .. tostring(writeCallOk and okWrite == true))
+            if not writeCallOk or not okWrite then
                 -- Report failure to the GUI: red toast, keep dirty=true and the button enabled.
                 reportSaveResult(false, L("settings_write_failed"))
                 HSMakeAlert(
@@ -740,23 +744,8 @@ function openSettingsGUI()
                         :send()
                 end
             end)
-            -- Cosmetic teardown only: delete the webview after a short delay so the
-            -- toast stays visible. The apply (reloadLES) already happened above.
-            if pendingReloadTimer ~= nil then
-                pcall(function() pendingReloadTimer:stop() end)
-                pendingReloadTimer = nil
-            end
-            local wv = settingsWebview
-            pendingReloadTimer = hs.timer.doAfter(0.6, function()
-                pendingReloadTimer = nil
-                if wv then
-                    pcall(function() wv:delete() end)
-                end
-                if settingsWebview == wv then
-                    settingsWebview = nil
-                    settingsUC = nil
-                end
-            end)
+            -- Keep the form open: edits can arrive while the bridge response is
+            -- pending, or immediately after success. JS retains their dirty state.
         else
             -- Empty patch: report failure to the GUI, keep dirty=true and the button enabled.
             reportSaveResult(false, L("settings_no_valid_keys"))

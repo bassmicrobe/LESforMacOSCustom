@@ -118,7 +118,7 @@ function buildPluginMenu()
             tremove(arr, i)
         elseif sfind(arr[i], "%-%-") == 1 then
             tinsert(arr, i, "--")
-        elseif sfind(arr[i], "End") then
+        elseif smatch(arr[i], "^%s*End%s*$") or smatch(arr[i], "^%s*End%s*;") then
             tremove(arr, i)
         elseif sfind(arr[i], "") then
         end
@@ -137,6 +137,14 @@ function buildPluginMenu()
 
     -- Pre-allocate pluginArray capacity hint (reduces table resizing)
     local pluginIdx = 0
+    local rows = {}
+    local function appendRow(depth, category, line)
+        pluginIdx = pluginIdx + 1
+        -- Retain the public diagnostic strings without parsing their ambiguous
+        -- commas. Private tuples preserve all category and payload characters.
+        pluginArray[pluginIdx] = depth .. ", " .. category .. ", " .. line
+        rows[pluginIdx] = { depth, " " .. category, " " .. line }
+    end
 
     for i = #arr, 1, -1 do
         local line = arr[i]
@@ -148,22 +156,16 @@ function buildPluginMenu()
             subfoldername = sgsub(line, '', '')
             tinsert(subfolderhistory, subfoldername)
             subfolderval = 1
-            local entry = subfolderval .. ", " .. subfoldername .. ", " .. "❗️"
-            pluginIdx = pluginIdx + 1
-            pluginArray[pluginIdx] = entry
-            pluginIdx = pluginIdx + 1
-            pluginArray[pluginIdx] = entry
+            appendRow(subfolderval, subfoldername, "❗️")
+            appendRow(subfolderval, subfoldername, "❗️")
             tremove(arr, i)
         elseif sfind(firstTwo, "//") then
             tinsert(subfolderhistory, subfoldername)
             subfoldername = sgsub(line, '', '')
             local _, count = sgsub(line, "%/", "")
             subfolderval = count
-            local entry = subfolderval .. ", " .. subfoldername .. ", " .. "❗️"
-            pluginIdx = pluginIdx + 1
-            pluginArray[pluginIdx] = entry
-            pluginIdx = pluginIdx + 1
-            pluginArray[pluginIdx] = entry
+            appendRow(subfolderval, subfoldername, "❗️")
+            appendRow(subfolderval, subfoldername, "❗️")
             tremove(arr, i)
         elseif sfind(firstTwo, "%.%.") then
             subfoldername = subfolderhistory[subfolderval]
@@ -175,22 +177,8 @@ function buildPluginMenu()
             subfolderval = 0
             tremove(arr, i)
         else
-            pluginIdx = pluginIdx + 1
-            pluginArray[pluginIdx] = subfolderval .. ", " .. subfoldername .. ", " .. line
+            appendRow(subfolderval, subfoldername, line)
         end
-    end
-
-    -- Split function with cached locals
-    local sgmatch = string.gmatch
-    local function mysplit(inputstr)
-        if inputstr == nil then return end
-        local t = {}
-        local idx = 1
-        for str in sgmatch(inputstr, "([^,]+)") do
-            t[idx] = str
-            idx = idx + 1
-        end
-        return t
     end
 
     local function RemoveSlashes(str, scope)
@@ -246,11 +234,10 @@ function buildPluginMenu()
             goto pls
         end
 
-        local level = tonumber(string.sub(pluginArray[i], 1, 1))
+        local thisIndex = rows[i]
+        local nextIndex = rows[i + 1]
+        local level = tonumber(thisIndex[1])
         if level == nil then goto pls end  -- malformed/over-popped entry; skip rather than crash on a nil comparison
-
-        local thisIndex = mysplit(pluginArray[i])
-        local nextIndex = mysplit(pluginArray[i + 1])
         local categoryName = RemoveSlashes(thisIndex[2], level)
         -- Never let a category alias the global root ("menu") — that would build
         -- a self-referential menu table (infinite recursion when traversed) —

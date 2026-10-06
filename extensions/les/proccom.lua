@@ -202,8 +202,7 @@ function _selectLiveMenuItem(menuItem)
   local hsobj = getLiveHsAppObj()
   if hsobj == nil then return false end
   if hsobj:findMenuItem(menuItem) ~= nil then
-    hsobj:selectMenuItem(menuItem)
-    return true
+    return hsobj:selectMenuItem(menuItem) == true
   else
     local tipValue = strSanitize(getTipValue(menuItem))
     local tipLower = tipValue:lower()  -- hoist out of the loop
@@ -215,8 +214,7 @@ function _selectLiveMenuItem(menuItem)
         if hsobj:findMenuItem(val) ~= nil then
           -- selectMenuItem _is_ case sensitive so we must
           -- pass the value as defined in the table
-          hsobj:selectMenuItem(val)
-          return true
+          return hsobj:selectMenuItem(val) == true
         end
       end
     end
@@ -232,8 +230,7 @@ function _selectLiveMenuItem(menuItem)
       --       different)
       [[(.*)]] .. tipValue .. [[(.*)]]
     if hsobj:findMenuItem(pattern, true) ~= nil then
-      hsobj:selectMenuItem(pattern)
-      return true
+      return hsobj:selectMenuItem(pattern, true) == true
     end
   end
 
@@ -244,7 +241,9 @@ end
 function selectLiveMenuItem(menuItem)
   if _selectLiveMenuItem(menuItem) == false then
     local itemName = getTipValue(menuItem)
-    print(string.format([[selectLiveMenuItem(): Menu item "%s" not found — Live's menu may have changed in this version]], itemName))
-    hs.alert.show(string.format([[%s: メニュー項目 "%s" が見つかりません。Live のバージョンによってメニュー構造が変わった可能性があります。]], programName, itemName), 4)
+    print(string.format([[selectLiveMenuItem(): Menu item "%s" is unavailable or could not be selected]], itemName))
+    hs.alert.show(string.format([[%s: メニュー項目 "%s" を選択できませんでした。Live の状態とメニューを確認してください。]], programName, itemName), 4)
+    return false
   end
+  return true
 end

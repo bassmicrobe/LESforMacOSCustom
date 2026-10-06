@@ -206,6 +206,34 @@ describe("plugin scanner", function()
         assert.matches("cache", err, 1, true)
     end)
 
+    it("returns a successful incremental scan after persisting the cache", function()
+        local originalLoadCache = scanner.loadCache
+        local originalFullScan = scanner.fullScan
+        local originalSaveCache = scanner.saveCache
+        local persisted
+        local plugins = {Utility = {category = "Utility", format = "VST3"}}
+
+        scanner.loadCache = function() return {plugins = {}, scanned_at = 0} end
+        scanner.fullScan = function() return plugins end
+        scanner.saveCache = function(data)
+            persisted = data
+            return true
+        end
+
+        local added, removed, all, err = scanner.incrementalScan()
+
+        scanner.loadCache = originalLoadCache
+        scanner.fullScan = originalFullScan
+        scanner.saveCache = originalSaveCache
+
+        assert.is_nil(err)
+        assert.are.same(plugins, added)
+        assert.are.same({}, removed)
+        assert.are.same(plugins, all)
+        assert.are.same(plugins, persisted.plugins)
+        assert.is_number(persisted.scanned_at)
+    end)
+
     it("does not start a forced scan when clearing the cache fails", function()
         local originalSaveCache = scanner.saveCache
         local originalScanAndPrompt = scanner.scanAndPrompt

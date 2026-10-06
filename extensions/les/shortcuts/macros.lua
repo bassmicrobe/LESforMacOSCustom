@@ -52,6 +52,16 @@ end)
 -------------------------------------------------------
 
 _G.debounce = false
+local saveAsGeneration = 0
+local pendingSaveAsTimer
+
+function cancelPendingSaveAs()
+    saveAsGeneration = saveAsGeneration + 1
+    if pendingSaveAsTimer then pendingSaveAsTimer:stop() end
+    pendingSaveAsTimer = nil
+    _G.debounce = false
+end
+
 local down12, down22 = false, true
 local press12, press22
 local scaling = 0
@@ -111,7 +121,7 @@ end
 local function handleDisableLoop(mods)
     if _G.disableloop ~= 1 then return end
     if mods.shift and mods.cmd then
-        hs.eventtap.keyStroke({"cmd", "shift"}, "J")
+        hs.eventtap.keyStroke({"cmd", "shift"}, "J", 0)
     end
 end
 
@@ -157,15 +167,23 @@ local function handleSaveAsNewVersion(mods)
     local mainwindowname = mainwin:title() or ""
     local projectname = mainwindowname:gsub("%s%s%[.*", "")
     local newname
+    local requestGeneration = saveAsGeneration
+    local function finishAfter(delay)
+        pendingSaveAsTimer = hs.timer.doAfter(delay, function()
+            if requestGeneration == saveAsGeneration then cancelPendingSaveAs() end
+        end)
+    end
 
     if projectname == "Untitled" then
         if astBlockingQuery(programName,
             [[Your project name is "Untitled"\nAre you sure you want to save it as a new version?]]
         ) == true then
-            hs.eventtap.keyStroke({"cmd", "shift"}, "S")
-            hs.timer.doAfter(2, function() _G.debounce = false end)
-            return
+            hs.eventtap.keyStroke({"cmd", "shift"}, "S", 0, app)
+            finishAfter(2)
+        else
+            cancelPendingSaveAs()
         end
+        return
     end
 
     -- Parse a trailing "_<version>" robustly: base is everything before the
@@ -183,12 +201,19 @@ local function handleSaveAsNewVersion(mods)
         newname = projectname .. "_2"
     end
 
-    selectLiveMenuItem("Save Live Set As")
+    if selectLiveMenuItem("Save Live Set As") ~= true then
+        cancelPendingSaveAs()
+        return
+    end
     -- Non-blocking: wait for Save dialog to appear, then type name and confirm
-    hs.timer.doAfter(0.18, function()
-        hs.eventtap.keyStrokes(newname)
-        hs.eventtap.keyStroke({}, "return")
-        hs.timer.doAfter(2.5, function() _G.debounce = false end)
+    pendingSaveAsTimer = hs.timer.doAfter(0.18, function()
+        if requestGeneration ~= saveAsGeneration then return end
+        pendingSaveAsTimer = nil
+        local ok, front = pcall(function() return app:isFrontmost() end)
+        if not ok or not front then cancelPendingSaveAs(); return end
+        hs.eventtap.keyStrokes(newname, app)
+        hs.eventtap.keyStroke({}, "return", 0, app)
+        finishAfter(2.5)
     end)
 end
 
@@ -344,14 +369,21 @@ local function handleVstRedo(mods, eventtype)
     end
 end
 
----@type table<number, fun(mods: table, eventtype: number)[]>
+---@type table<number, table<number, fun(mods: table, eventtype: number)[]>>
 local keyDispatch = {}
 
-local function registerKey(keyName, handler)
+local function registerKey(keyName, handler, eventType)
     local code = hs.keycodes.map[keyName]
     if code then
-        if not keyDispatch[code] then keyDispatch[code] = {} end
-        table.insert(keyDispatch[code], handler)
+        local phase = eventType or hs.eventtap.event.types.keyDown
+        local phases = keyDispatch[code] or {}
+        local handlers = phases[phase] or {}
+        local nextHandlers = { table.unpack(handlers) }
+        nextHandlers[#nextHandlers + 1] = handler
+        local nextPhases = {}
+        for kind, registered in pairs(phases) do nextPhases[kind] = registered end
+        nextPhases[phase] = nextHandlers
+        keyDispatch[code] = nextPhases
     end
 end
 
@@ -363,8 +395,8 @@ registerKey("S", handleSaveAsNewVersion)
 registerKey("W", handleCloseWindow)
 registerKey("W", handleCloseAllWindows)
 registerKey("L", handleMarker)
-registerKey("D", handleAbsoluteDuplicate)
-registerKey("V", handleAbsoluteReplace)
+registerKey("D", handleAbsoluteDuplicate, hs.eventtap.event.types.keyUp)
+registerKey("V", handleAbsoluteReplace, hs.eventtap.event.types.keyUp)
 registerKey("0", handleDoubleZeroDelete)
 registerKey("X", handleClearTrack)
 registerKey("C", handleColorTrack)
@@ -389,7 +421,10 @@ _G.quickmacro = hs.eventtap.new({
     end
 
     -- O(1) dispatch: look up handlers by keycode
-    local handlers = keyDispatch[keycode]
+    -- Most actions run on keyDown; release-based replacement macros explicitly
+    -- opt into keyUp. A press/release pair must never execute an action twice.
+    local phases = keyDispatch[keycode]
+    local handlers = phases and phases[eventtype]
     if handlers then
         -- Cache modifiers ONCE per event instead of 28+ times
         local mods = hs.eventtap.checkKeyboardModifiers()
@@ -398,7 +433,7 @@ _G.quickmacro = hs.eventtap.new({
             -- must not strand _G.debounce = true, which would dead-lock the macro.
             local ok, err = pcall(handler, mods, eventtype)
             if not ok then
-                _G.debounce = false
+                cancelPendingSaveAs()
                 print("[macros] handler error: " .. tostring(err))
             end
         end

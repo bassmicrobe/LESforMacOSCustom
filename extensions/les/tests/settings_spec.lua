@@ -77,6 +77,13 @@ local function simulateRestart()
     settingsManager:init()
 end
 
+local function readSettings()
+    local file = assert(io.open(TEST_DIR .. "/settings.ini", "r"))
+    local content = assert(file:read("*a"))
+    assert(file:close())
+    return content
+end
+
 -- ── Tests ─────────────────────────────────────────────────────────────
 
 describe("settingsManager", function()
@@ -101,6 +108,92 @@ describe("settingsManager", function()
             assert.is_true(secureFileCalls > 0)
             assert.is_true(secureDirCalls > 0)
         end)
+
+        it("does not recreate an existing settings file merely because it cannot be read", function()
+            local original = readSettings()
+            local originalHS = rawget(_G, "hs")
+            local originalPresence = rawget(_G, "ioIsFilePresent")
+            local originalRead = rawget(_G, "fileToTable")
+            local originalCreate = rawget(_G, "ShellCreateEmptyFile")
+            local createCalls = 0
+            rawset(_G, "hs", { fs = { symlinkAttributes = function() return { mode = "file" } end } })
+            rawset(_G, "ioIsFilePresent", function() return false end)
+            rawset(_G, "fileToTable", function() return false end)
+            rawset(_G, "ShellCreateEmptyFile", function() createCalls = createCalls + 1 end)
+            local ok, result = pcall(settingsManager.init, settingsManager)
+            rawset(_G, "hs", originalHS)
+            rawset(_G, "ioIsFilePresent", originalPresence)
+            rawset(_G, "fileToTable", originalRead)
+            rawset(_G, "ShellCreateEmptyFile", originalCreate)
+            assert.is_true(ok)
+            assert.is_false(result)
+            assert.are.equal(0, createCalls)
+            assert.are.equal(original, readSettings())
+            assert.are.equal(1, settingsManager:getVal("autoadd"))
+        end)
+
+        it("secures retained backups using the native directory iterator state and closes it", function()
+            local originalHS = rawget(_G, "hs")
+            local originalSecure = rawget(_G, "SetSecureFileMode")
+            local secured = {}
+            local closed = 0
+            rawset(_G, "hs", { fs = { dir = function()
+                local entries = { ".", "settings_100.ini", "settings_200.ini", "other.ini" }
+                local state = setmetatable({}, { __close = function() closed = closed + 1 end })
+                local index = 0
+                local function iterator(actualState)
+                    assert.are.equal(state, actualState)
+                    index = index + 1
+                    return entries[index]
+                end
+                return iterator, state, nil, state
+            end } })
+            rawset(_G, "SetSecureFileMode", function(path) secured[path] = true end)
+            local ok, result = pcall(settingsManager.init, settingsManager)
+            rawset(_G, "hs", originalHS)
+            rawset(_G, "SetSecureFileMode", originalSecure)
+            assert.is_true(ok)
+            assert.is_true(result)
+            assert.is_true(secured[TEST_DIR .. "/settings_100.ini"])
+            assert.is_true(secured[TEST_DIR .. "/settings_200.ini"])
+            assert.is_nil(secured[TEST_DIR .. "/other.ini"])
+            assert.are.equal(1, closed)
+        end)
+
+        it("prunes old backups using the native iterator state and closes its directory handles", function()
+            local originalHS = rawget(_G, "hs")
+            local originalOS = rawget(_G, "os")
+            local removed = {}
+            local closed = 0
+            assert.is_true(tableToFile(TEST_DIR .. "/settings.ini", { "autoadd = 0" }))
+            rawset(_G, "hs", {
+                timer = { secondsSinceEpoch = function() return 1000000 end },
+                fs = { dir = function()
+                    local entries = { "settings_100.ini", "settings_200.ini", "settings_300.ini", "settings_400.ini",
+                        "settings_500.ini", "settings_600.ini", "settings_700.ini" }
+                    local state = setmetatable({}, { __close = function() closed = closed + 1 end })
+                    local index = 0
+                    local function iterator(actualState)
+                        assert.are.equal(state, actualState)
+                        index = index + 1
+                        return entries[index]
+                    end
+                    return iterator, state, nil, state
+                end },
+            })
+            rawset(_G, "os", setmetatable({
+                remove = function(path) removed[#removed + 1] = path; return true end,
+            }, { __index = originalOS }))
+            local ok, result = pcall(settingsManager.init, settingsManager)
+            rawset(_G, "hs", originalHS)
+            rawset(_G, "os", originalOS)
+            assert.is_true(ok)
+            assert.is_true(result)
+            assert.are.same({ TEST_DIR .. "/settings_100.ini", TEST_DIR .. "/settings_200.ini" }, removed)
+            -- Secure before loading, prune, secure after writing, then secure
+            -- once more when the backfilled settings are reloaded.
+            assert.are.equal(4, closed)
+        end)
     end)
 
     describe("writeVal", function()
@@ -108,6 +201,13 @@ describe("settingsManager", function()
             assert.is_true(settingsManager:writeVal("autoadd", "0"))
             simulateRestart()
             assert.are.equal(0, settingsManager:getVal("autoadd"))
+        end)
+
+        it("rejects an unknown key or invalid setting without changing the file", function()
+            local original = readSettings()
+            assert.is_false(settingsManager:writeVal("unrecognized", "value"))
+            assert.is_false(settingsManager:writeVal("autoadd", "2"))
+            assert.are.equal(original, readSettings())
         end)
     end)
 
@@ -192,6 +292,52 @@ describe("settingsManager", function()
             assert.is_true(ok, "restart must not panic on bookmarkx=0, got: " .. tostring(panicMessage))
             assert.are.equal(0, settingsManager:getVal("bookmarkx"))
         end)
+
+        it("rejects an invalid patch as a whole without persisting its valid fields", function()
+            for _, invalid in ipairs({
+                { autoadd = "2" },
+                { autoadd = true },
+                { bookmarkx = "0.5" },
+                { bookmarkx = "-1" },
+                { loadspeed = "1e309" },
+                { loadspeed = math.huge },
+                { loadspeed = 0 / 0 },
+                { loadspeed = "" },
+                { openaimodel = {} },
+                { openaikey = false },
+            }) do
+                local patch = { texticon = "1" }
+                for key, value in pairs(invalid) do patch[key] = value end
+                local original = readSettings()
+                assert.is_false(settingsManager:writeFromGui(patch))
+                assert.are.equal(original, readSettings())
+                assert.are.equal(0, settingsManager:getVal("texticon"))
+                assert.are.equal(1, settingsManager:getVal("autoadd"))
+                assert.are.equal(500, settingsManager:getVal("bookmarkx"))
+                assert.are.equal(0.3, settingsManager:getVal("loadspeed"))
+                assert.are.equal("gpt-4o-mini", settingsManager:getVal("openaimodel"))
+                assert.are.equal("未設定", settingsManager:getVal("openaikey"))
+            end
+        end)
+
+        it("does not replace settings after a read failure", function()
+            local original = readSettings()
+            local readFile = rawget(_G, "fileToTable")
+            rawset(_G, "fileToTable", function() return false end)
+            local guiCallOK, guiResult = pcall(settingsManager.writeFromGui, settingsManager, { texticon = "1" })
+            local singleCallOK, singleResult = pcall(settingsManager.writeVal, settingsManager, "autoadd", "0")
+            local initCallOK, initResult = pcall(settingsManager.init, settingsManager)
+            rawset(_G, "fileToTable", readFile)
+            assert.is_true(guiCallOK)
+            assert.is_false(guiResult)
+            assert.is_true(singleCallOK)
+            assert.is_false(singleResult)
+            assert.is_true(initCallOK)
+            assert.is_false(initResult)
+            assert.are.equal(original, readSettings())
+            assert.are.equal(0, settingsManager:getVal("texticon"))
+            assert.are.equal(1, settingsManager:getVal("autoadd"))
+        end)
     end)
 
     -- ── Regression: parser semantics, self-heal, no boot panic ──────────
@@ -234,6 +380,20 @@ describe("settingsManager", function()
             local bookmarkxDefault = tonumber(settingsManager["bookmarkx"]["default"])
             assert.are.equal(bookmarkxDefault, settingsManager:getVal("bookmarkx"))
             assert.are.equal(500, settingsManager:getVal("bookmarkx"))
+            assert.are.equal(0.3, settingsManager:getVal("loadspeed"))
+            assert.are.equal(1, settingsManager:getVal("autoadd"))
+        end)
+
+        it("self-heals fractional integers, negative delays, and non-finite numbers on disk", function()
+            local ok = writeRawIniAndRestart({
+                "bookmarkx = 800.5",
+                "bookmarky = 1e309",
+                "loadspeed = -0.5",
+                "autoadd = 2",
+            })
+            assert.is_true(ok)
+            assert.are.equal(500, settingsManager:getVal("bookmarkx"))
+            assert.are.equal(500, settingsManager:getVal("bookmarky"))
             assert.are.equal(0.3, settingsManager:getVal("loadspeed"))
             assert.are.equal(1, settingsManager:getVal("autoadd"))
         end)

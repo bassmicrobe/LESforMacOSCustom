@@ -15,7 +15,12 @@ function fileToTable(filePath, retTable)
   for _line in fileHdl:lines() do
     table.insert(retTable, _line)
   end
-  return fileHdl:close() ~= false
+  local closed, closeErr = fileHdl:close()
+  if not closed then
+    print("fileToTable(): failed to close input file: " .. tostring(closeErr))
+    return false
+  end
+  return true
 end
 
 -- Converts an index table into a newline-seperated file.
@@ -34,6 +39,12 @@ function tableToFile(filePath, retTable)
     print("tableToFile(): failed to open for write: " .. tostring(tmpPath))
     return false
   end
+  local function discardTemp(stage, err, alreadyClosed)
+    if not alreadyClosed then fileHdl:close() end
+    os.remove(tmpPath)
+    print("tableToFile(): failed to " .. stage .. " temp file: " .. tostring(err))
+    return false
+  end
   local maxIdx = 0
   for k in pairs(retTable) do
     if type(k) == "number" and k > maxIdx then
@@ -43,16 +54,14 @@ function tableToFile(filePath, retTable)
   for idx = 1, maxIdx do
     local val = retTable[idx]
     if val ~= nil then
-      fileHdl:write(val, "\n")
+      local written, writeErr = fileHdl:write(val, "\n")
+      if not written then return discardTemp("write", writeErr) end
     end
   end
-  fileHdl:flush()
-  local ok = fileHdl:close()
-  if ok == false then
-    os.remove(tmpPath)
-    print("tableToFile(): failed to close temp file: " .. tostring(tmpPath))
-    return false
-  end
+  local flushed, flushErr = fileHdl:flush()
+  if not flushed then return discardTemp("flush", flushErr) end
+  local closed, closeErr = fileHdl:close()
+  if not closed then return discardTemp("close", closeErr, true) end
   -- Close the transient-mode window: os.rename replaces the destination inode
   -- with the temp file's (default umask) mode, which would drop an already
   -- secured settings.ini from 600 back to e.g. 644 until secureSettingsFiles()

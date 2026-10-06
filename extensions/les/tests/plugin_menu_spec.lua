@@ -66,6 +66,115 @@ end
 
 describe("buildPluginMenu nesting", function()
 
+    it("retains comma-bearing category names and nested sibling folders", function()
+        local root = build([[
+/Mix, Mastering
+//Dynamics, Sidechain
+Comp, Gate
+"comp, gate"
+..
+//EQ, Filters
+EQ, Wide
+"eq, wide" vst
+..
+/Instrument, Synth
+Soft, Warm
+"soft, warm" au
+End
+]])
+        local mixing = item(root, "Mix, Mastering")
+        local instruments = item(root, "Instrument, Synth")
+        assert.is_truthy(mixing and mixing.menu, "the complete category name must be retained")
+        assert.is_truthy(instruments and instruments.menu)
+        assert.are.same({ "Mix, Mastering", "Instrument, Synth" }, titles(root))
+        assert.are.same({ "Dynamics, Sidechain", "EQ, Filters" }, titles(mixing.menu))
+
+        local dynamics = item(mixing.menu, "Dynamics, Sidechain")
+        local eq = item(mixing.menu, "EQ, Filters")
+        local compressor = item(dynamics.menu, "Comp, Gate")
+        local equalizer = item(eq.menu, "EQ, Wide")
+        local synth = item(instruments.menu, "Soft, Warm")
+        assert.is_truthy(compressor)
+        assert.is_truthy(equalizer)
+        assert.is_truthy(synth)
+        local originalLoadPlugin = rawget(_G, "loadPlugin")
+        local loaded = {}
+        rawset(_G, "loadPlugin", function(query) loaded[#loaded + 1] = query:match("^%s*(.-)%s*$") end)
+        compressor.fn()
+        equalizer.fn()
+        synth.fn()
+        rawset(_G, "loadPlugin", originalLoadPlugin)
+        assert.are.same({ '"comp, gate"', '"eq, wide" vst', '"soft, warm" au' }, loaded)
+    end)
+
+    it("retains commas in display names and queries alongside categories and separators", function()
+        local root = build([[
+Root, Utility
+"root,utility" vst
+/Effects
+//Tools
+🔴 Mix, Master
+"mix, master, tools" au
+--
+Utility
+"Utility"
+End
+]])
+        local effects = item(root, "Effects")
+        local tools = effects and item(effects.menu, "Tools")
+        assert.is_truthy(tools and tools.menu, "the nested category must retain its hierarchy")
+        local rootPlugin = item(root, "Root, Utility")
+        local coloredPlugin = item(tools.menu, "🔴 Mix, Master")
+        local utility = item(tools.menu, "Utility")
+        assert.is_truthy(rootPlugin, "the root plugin name must retain its comma")
+        assert.is_truthy(coloredPlugin, "the decorated plugin name must retain its comma")
+        assert.is_truthy(utility, "ordinary plugin entries must remain loadable")
+        assert.are.same({ "🔴 Mix, Master", "-", "Utility" }, titles(tools.menu))
+
+        local originalLoadPlugin = rawget(_G, "loadPlugin")
+        local loaded = {}
+        rawset(_G, "loadPlugin", function(query) loaded[#loaded + 1] = query:match("^%s*(.-)%s*$") end)
+        rootPlugin.fn()
+        coloredPlugin.fn()
+        utility.fn()
+        rawset(_G, "loadPlugin", originalLoadPlugin)
+        assert.are.same({ '"root,utility" vst', '"mix, master, tools" au', '"Utility"' }, loaded)
+    end)
+
+    it("preserves plugin names and search queries containing End", function()
+        local root = build([[
+/Effects
+Endorphin
+"Endorphin"
+Blend
+"Blend End"
+End
+]])
+        local effects = item(root, "Effects")
+        assert.is_truthy(effects and effects.menu)
+        local endorphin = item(effects.menu, "Endorphin")
+        local blend = item(effects.menu, "Blend")
+        assert.is_truthy(endorphin, "Endorphin must not be treated as a terminator")
+        assert.is_truthy(blend, "a query containing End must not remove its plugin")
+
+        local originalLoadPlugin = rawget(_G, "loadPlugin")
+        local loaded = {}
+        rawset(_G, "loadPlugin", function(query) loaded[#loaded + 1] = query:match("^%s*(.-)%s*$") end)
+        endorphin.fn()
+        blend.fn()
+        rawset(_G, "loadPlugin", originalLoadPlugin)
+        assert.are.same({ '"Endorphin"', '"Blend End"' }, loaded)
+    end)
+
+    it("continues to accept surrounding whitespace and trailing comments on End markers", function()
+        for _, marker in ipairs({ "End", "  End  ", "End ; required terminator", "End; required terminator" }) do
+            local root = build('/Utility\nUtility\n"Utility"\n' .. marker .. "\n")
+            local utility = item(root, "Utility")
+            assert.is_truthy(utility and utility.menu)
+            assert.are.same({ "Utility" }, titles(utility.menu))
+        end
+    end)
+
     it("builds a realistic two-level config (mirrors the default menuconfig.ini)", function()
         local root = build([[
 /Instruments
