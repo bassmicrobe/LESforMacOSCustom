@@ -330,3 +330,11 @@ THE SOFTWARE.
 ```
 
 上記のほか、個別ファイルの SPDX ヘッダや `extensions/utf8/LICENSE` など、サブディレクトリに含まれるライセンス表記も条件に従ってください。
+
+## CI 内部 Node.js 更新（2026-10-22）
+
+Node.js 20 の action を公式 Node.js 24 対応版へ更新し、解決済み commit SHA に固定しました：checkout v7、upload-artifact v6、download-artifact v7。アプリ本体の Lua / Objective-C と依存ロックは変更しません。GitHub hosted macOS 14 / Ubuntu runner を使用し、必要な runner 2.327.1 以上に対応します。
+
+artifact は既存の名前指定を維持するため download v5 以降の ID 指定展開先変更の影響はありません。artifact 名・path・retention、persist-credentials:false、release environment、権限、署名・公証・タグ公開条件は変更しません。PR CI の macOS build/test と Lua Docker 検証を実施し、署名・公証・公開の workflow は検証のために実行しません。
+
+一次情報：[checkout v7](https://github.com/actions/checkout/tree/v7)、[upload-artifact v6](https://github.com/actions/upload-artifact/tree/v6)、[download-artifact v7](https://github.com/actions/download-artifact/tree/v7)。
