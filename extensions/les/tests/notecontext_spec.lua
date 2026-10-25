@@ -7,7 +7,8 @@ local locale = require("util.locale")
 
 local function createHarness(kind, options)
     options = options or {}
-    local state = { views = {}, confirmations = {}, saved = {}, alerts = {} }
+    local state = { views = {}, confirmations = {}, saved = {}, alerts = {}, readErrors = {} }
+    if options.initialReadError then state.readErrors["Old Project"] = true end
     local environment
     local hsMock = {
         json = {
@@ -63,13 +64,13 @@ local function createHarness(kind, options)
     environment._G = environment
     local module = assert(loadfile("extensions/les/tracking/" .. kind .. ".lua", "t", environment))()
     if kind == "projectnotes" then
-        module.load = function(project) return state.saved[project] or {} end
+        module.load = function(project) return state.saved[project] or {}, state.readErrors[project] and "unreadable" end
         module.save = function(project, notes) state.saved[project] = notes return true end
         state.open = environment.openProjectNotes
         state.add = function(text) state.message({ body = { action = "add", text = text } }) end
         state.savedBody = function(project) return state.saved[project][1].body end
     else
-        module.loadAll = function(project) return state.saved[project] or {} end
+        module.loadAll = function(project) return state.saved[project] or {}, state.readErrors[project] and "unreadable" end
         module.saveAll = function(project, notes) state.saved[project] = notes return true end
         state.open = environment.openTrackNotes
         state.add = function(text) state.message({ body = { action = "add", track = "Lead", text = text } }) end
@@ -82,6 +83,36 @@ end
 
 for _, kind in ipairs({ "projectnotes", "tracknotes" }) do
     describe(kind .. " project-switch confirmation", function()
+        it("reports unreadable notes instead of opening a misleading empty panel", function()
+            local harness = createHarness(kind, {initialReadError = true})
+            assert.are.equal(0, #harness.views)
+            assert.are.equal(1, #harness.alerts)
+        end)
+
+        it("keeps the current project when the requested notes are unreadable", function()
+            local harness = createHarness(kind)
+            harness.readErrors["New Project"] = true
+            harness.switch("New Project")
+            assert.are.equal(0, #harness.confirmations)
+            assert.are.equal(1, #harness.alerts)
+            harness.add("kept here")
+            assert.are.equal("kept here", harness.savedBody("Old Project"))
+            assert.is_nil(harness.saved["New Project"])
+            assert.are.equal(1, #harness.views[1].documents)
+        end)
+
+        it("rechecks readability after a delayed confirmation before switching", function()
+            local harness = createHarness(kind)
+            harness.switch("New Project")
+            harness.readErrors["New Project"] = true
+            harness.confirmations[1](true, nil)
+            assert.are.equal(1, #harness.views[1].documents)
+            assert.are.equal(1, #harness.alerts)
+            harness.add("still old")
+            assert.are.equal("still old", harness.savedBody("Old Project"))
+            assert.is_nil(harness.saved["New Project"])
+        end)
+
         it("keeps the old header and save destination when switching is cancelled", function()
             local harness = createHarness(kind)
             local view = harness.views[1]

@@ -48,6 +48,24 @@ const cases = [
   ['track name', 'tracking/tracknotes.lua', 'trackInput'],
 ];
 
+test('AI chat restores the failed draft and enables retry', () => {
+  const declaration = readSource('ai/chat.lua').match(/function onReply\([^)]*\) \{[\s\S]*?\n\}/)[0];
+  const input = { value: '', disabled: true, focus() { this.focused = true; } };
+  const button = { disabled: true };
+  const context = vm.createContext({
+    sending: true,
+    document: { getElementById: (id) => id === 'inp' ? input : button },
+    resizeTA: () => {},
+  });
+  vm.runInContext(declaration, context);
+  context.onReply(false, '書き直したくない質問');
+  assert.equal(input.value, '書き直したくない質問');
+  assert.equal(input.disabled, false);
+  assert.equal(button.disabled, false);
+  assert.equal(input.focused, true);
+  assert.equal(context.sending, false);
+});
+
 for (const [label, path, inputId] of cases) {
   test(`${label}: IME confirmation does not submit or switch context`, () => {
     for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {

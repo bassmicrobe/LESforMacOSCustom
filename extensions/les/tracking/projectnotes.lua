@@ -52,22 +52,25 @@ local function legacyNotesFilePath(projectName)
 end
 
 local function openNotesFile(projectName)
-    local file = io.open(notesFilePath(projectName), "r")
+    local file, _, code = io.open(notesFilePath(projectName), "r")
     if file then return file end
-    return io.open(legacyNotesFilePath(projectName), "r")
+    if code ~= 2 then return nil, "project notes file is unreadable" end
+    local legacy, _, legacyCode = io.open(legacyNotesFilePath(projectName), "r")
+    if not legacy and legacyCode ~= 2 then return nil, "legacy project notes file is unreadable" end
+    return legacy
 end
 
 --- Load notes for a project. Returns an array sorted by timestamp ascending.
 ---@param projectName string
 ---@return table
 function projectnotes.load(projectName)
-    local f = openNotesFile(projectName)
-    if not f then return {} end
+    local f, openError = openNotesFile(projectName)
+    if not f then return {}, openError end
     local raw = f:read("*a")
-    f:close()
-    if not raw or raw == "" then return {} end
+    local closed = f:close()
+    if not raw or raw == "" or not closed then return {}, "project notes could not be read" end
     local ok, data = pcall(hs.json.decode, raw)
-    if not (ok and type(data) == "table") then return {} end
+    if not (ok and type(data) == "table") then return {}, "project notes JSON is invalid" end
     -- The notes file is an untrusted boundary (may be hand-edited or written by
     -- another tool). Keep only well-formed records with a numeric timestamp and
     -- coerce body to a string, so downstream os.date/string.format/gsub can
@@ -75,8 +78,8 @@ function projectnotes.load(projectName)
     local cleaned = {}
     for index, n in ipairs(data) do
         if type(n) == "table" then
-            local ts = math.floor(tonumber(n.timestamp) or 0)
-            if ts > 0 then
+            local ts = noteId.timestamp(n.timestamp)
+            if ts then
                 cleaned[#cleaned + 1] = {
                     id = noteId.normalize(n.id, ts, index),
                     timestamp = ts,
@@ -128,7 +131,8 @@ function projectnotes.addNote(projectName, text)
         or not utf8text.isWithinLimit(text, MAX_NOTE_LENGTH) then
         return false
     end
-    local notes = projectnotes.load(projectName)
+    local notes, readError = projectnotes.load(projectName)
+    if readError then return false, readError end
     local updated = {}
     for index, note in ipairs(notes) do updated[index] = note end
     updated[#updated + 1] = {
@@ -145,7 +149,8 @@ end
 ---@param identifier string|number
 function projectnotes.deleteNote(projectName, identifier)
     if type(identifier) ~= "string" and type(identifier) ~= "number" then return false end
-    local notes = projectnotes.load(projectName)
+    local notes, readError = projectnotes.load(projectName)
+    if readError then return false, readError end
     local newNotes = {}
     local removed = false
     for _, n in ipairs(notes) do
@@ -456,7 +461,12 @@ end
 --- Refresh only the timeline so draft text, focus and live regions survive.
 local function refreshTimeline(webview, projectName)
     if not webview or not projectName then return end
-    local timelineHTML = buildTimelineHTML(projectnotes.load(projectName))
+    local notes, readError = projectnotes.load(projectName)
+    if readError then
+        HSMakeAlert(programName, L("notes_load_failed"), true, "warning")
+        return
+    end
+    local timelineHTML = buildTimelineHTML(notes)
     local ok, encoded = pcall(hs.json.encode, timelineHTML)
     if not ok or type(encoded) ~= "string" then return end
     pcall(function() webview:evaluateJavaScript("replaceTimeline(" .. encoded .. ")") end)
@@ -465,18 +475,28 @@ end
 --- Open (or focus) the project notes panel for the current project.
 function openProjectNotes()
     local projectName = _G.trackname or "unsaved_project"
+    if _webview then notecontext.cancel(_webview) end
+    local notes, readError = projectnotes.load(projectName)
+    if readError then
+        HSMakeAlert(programName, L("notes_load_failed"), true, "warning")
+        return
+    end
 
     -- Reopening the same project must preserve the user's draft. A real project
     -- change gets a new document because the header and data context differ.
     if _webview ~= nil then
-        notecontext.cancel(_webview)
         local projectChanged = _currentProject ~= projectName
         if projectChanged then
             local currentWebview, previousProject = _webview, _currentProject
             notecontext.confirm(currentWebview, function()
                 return _webview == currentWebview and _currentProject == previousProject
             end, function()
-                local html = buildNotesHTML(projectName, projectnotes.load(projectName))
+                local currentNotes, currentError = projectnotes.load(projectName)
+                if currentError then
+                    HSMakeAlert(programName, L("notes_load_failed"), true, "warning")
+                    return
+                end
+                local html = buildNotesHTML(projectName, currentNotes)
                 currentWebview:html(html)
                 _currentProject = projectName
                 _summaryGeneration = _summaryGeneration + 1
@@ -509,7 +529,7 @@ function openProjectNotes()
             if ok and type(decoded) == "table" then
                 body = decoded
             else
-                print("[projectnotes] message decode failed:", tostring(body):sub(1, 120))
+                print("[projectnotes] message decode failed; ignoring invalid payload")
                 return
             end
         end
@@ -639,7 +659,7 @@ function openProjectNotes()
     _webview:windowTitle(L("projectnotes_title"))
     _webview:level(hs.drawing.windowLevels.floating)
     _webview:allowTextEntry(true)
-    _webview:html(buildNotesHTML(projectName, projectnotes.load(projectName)))
+    _webview:html(buildNotesHTML(projectName, notes))
 
     _webview:windowCallback(function(action)
         if action == "closing" and _webview == currentWebview then

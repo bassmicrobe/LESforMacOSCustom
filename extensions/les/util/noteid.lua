@@ -4,6 +4,17 @@
 local noteid = {}
 local fallbackSequence = 0
 
+--- Reject non-finite, out-of-range or non-renderable on-disk timestamps.
+---@param value any
+---@return integer|nil
+function noteid.timestamp(value)
+    local number = tonumber(value)
+    if not number or number ~= number or number <= 0 or number == math.huge then return nil end
+    local integer = math.tointeger(math.floor(number))
+    if not integer or not pcall(os.date, "%Y/%m/%d %H:%M", integer) then return nil end
+    return integer
+end
+
 local function isValid(value)
     return type(value) == "string"
         and #value > 0

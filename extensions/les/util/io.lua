@@ -34,6 +34,16 @@ end
 ---@return boolean ok
 function tableToFile(filePath, retTable)
   local tmpPath = filePath .. ".tmp"
+  -- Never follow an existing link/device at the scratch path. The settings
+  -- directory is private; checking before opening also avoids stale links
+  -- left by another tool overwriting an unrelated file.
+  if hs and hs.fs and type(hs.fs.symlinkAttributes) == "function" then
+    local inspected, attrs = pcall(hs.fs.symlinkAttributes, tmpPath)
+    if not inspected or (attrs and attrs.mode ~= "file") then
+      print("tableToFile(): unsafe temporary path; keeping original file")
+      return false
+    end
+  end
   local fileHdl = io.open(tmpPath, "w")
   if not fileHdl then
     print("tableToFile(): failed to open for write: " .. tostring(tmpPath))
@@ -45,6 +55,15 @@ function tableToFile(filePath, retTable)
     print("tableToFile(): failed to " .. stage .. " temp file: " .. tostring(err))
     return false
   end
+  -- A new file starts with the process umask. Restrict the empty file BEFORE
+  -- writing any API key, and fail closed if chmod fails. This also keeps 600
+  -- permissions across the atomic rename without a shell stat subprocess.
+  local secured, modeOK = pcall(function()
+    if type(SetSecureFileMode) == "function" then return SetSecureFileMode(tmpPath) end
+    -- util.io is also usable before helpers.lua is loaded.
+    return os.execute("chmod 600 " .. strQuote(tmpPath)) == true
+  end)
+  if not secured or modeOK ~= true then return discardTemp("secure", "owner-only permissions unavailable") end
   local maxIdx = 0
   for k in pairs(retTable) do
     if type(k) == "number" and k > maxIdx then
@@ -62,23 +81,6 @@ function tableToFile(filePath, retTable)
   if not flushed then return discardTemp("flush", flushErr) end
   local closed, closeErr = fileHdl:close()
   if not closed then return discardTemp("close", closeErr, true) end
-  -- Close the transient-mode window: os.rename replaces the destination inode
-  -- with the temp file's (default umask) mode, which would drop an already
-  -- secured settings.ini from 600 back to e.g. 644 until secureSettingsFiles()
-  -- runs. If the destination already exists, copy its octal mode onto the temp
-  -- file FIRST so the secured mode survives the atomic replace. Both paths are
-  -- POSIX single-quoted (injection-safe) via strQuote. When the destination is
-  -- absent we skip this — the caller (secureSettingsFiles) sets the mode.
-  if ioIsFilePresent(filePath) and type(strQuote) == "function" then
-    local statHdl = io.popen("stat -f '%Lp' " .. strQuote(filePath) .. " 2>/dev/null")
-    if statHdl then
-      local mode = (statHdl:read("*l") or ""):match("^(%d+)$")
-      statHdl:close()
-      if mode then
-        os.execute("chmod " .. mode .. " " .. strQuote(tmpPath))
-      end
-    end
-  end
   local renamed, renameErr = os.rename(tmpPath, filePath)
   if not renamed then
     os.remove(tmpPath)

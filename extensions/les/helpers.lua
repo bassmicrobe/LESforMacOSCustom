@@ -232,14 +232,16 @@ end
 -- Lua 5.4 has no octal literal, so the literal string "600" is passed to chmod.
 ---@param path string  Absolute path to the file to secure
 function SetSecureFileMode(path)
-    os.execute("chmod 600 " .. strQuote(path))
+    local ok = os.execute("chmod 600 " .. strQuote(path))
+    return ok == true
 end
 
 -- Restrict a sensitive directory to owner-only access (chmod 700).
 -- Lua 5.4 has no octal literal, so the literal string "700" is passed to chmod.
 ---@param path string  Absolute path to the directory to secure
 function SetSecureDirMode(path)
-    os.execute("chmod 700 " .. strQuote(path))
+    local ok = os.execute("chmod 700 " .. strQuote(path))
+    return ok == true
 end
 
 -- Uses AppleScript to sleep for %duration% seconds

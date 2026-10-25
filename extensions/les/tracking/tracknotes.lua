@@ -41,22 +41,25 @@ local function legacyNotesFilePath(projectName)
 end
 
 local function openNotesFile(projectName)
-    local file = io.open(notesFilePath(projectName), "r")
+    local file, _, code = io.open(notesFilePath(projectName), "r")
     if file then return file end
-    return io.open(legacyNotesFilePath(projectName), "r")
+    if code ~= 2 then return nil, "track notes file is unreadable" end
+    local legacy, _, legacyCode = io.open(legacyNotesFilePath(projectName), "r")
+    if not legacy and legacyCode ~= 2 then return nil, "legacy track notes file is unreadable" end
+    return legacy
 end
 
 --- Load all track notes for a project.
 ---@param projectName string
 ---@return table  {trackName = [{ts, body}]}
 function tracknotes.loadAll(projectName)
-    local f = openNotesFile(projectName)
-    if not f then return {} end
+    local f, openError = openNotesFile(projectName)
+    if not f then return {}, openError end
     local raw = f:read("*a")
-    f:close()
-    if not raw or raw == "" then return {} end
+    local closed = f:close()
+    if not raw or raw == "" or not closed then return {}, "track notes could not be read" end
     local ok, data = pcall(hs.json.decode, raw)
-    if not ok or type(data) ~= "table" then return {} end
+    if not ok or type(data) ~= "table" then return {}, "track notes JSON is invalid" end
 
     local cleaned = {}
     for trackName, notes in pairs(data) do
@@ -64,8 +67,8 @@ function tracknotes.loadAll(projectName)
             local cleanNotes = {}
             for index, note in ipairs(notes) do
                 if type(note) == "table" then
-                    local timestamp = math.floor(tonumber(note.ts) or 0)
-                    if timestamp > 0 then
+                    local timestamp = noteId.timestamp(note.ts)
+                    if timestamp then
                         cleanNotes[#cleanNotes + 1] = {
                             id = noteId.normalize(note.id, timestamp, index),
                             ts = timestamp,
@@ -127,7 +130,8 @@ function tracknotes.addNote(projectName, trackName, text)
         or not utf8text.isWithinLimit(text, MAX_NOTE_LENGTH) then
         return false
     end
-    local all = tracknotes.loadAll(projectName)
+    local all, readError = tracknotes.loadAll(projectName)
+    if readError then return false, readError end
     local currentNotes = type(all[trackName]) == "table" and all[trackName] or {}
     local updatedNotes = {}
     for index, note in ipairs(currentNotes) do updatedNotes[index] = note end
@@ -150,7 +154,8 @@ end
 function tracknotes.deleteNote(projectName, trackName, identifier)
     if type(trackName) ~= "string" then return false end
     if type(identifier) ~= "string" and type(identifier) ~= "number" then return false end
-    local all = tracknotes.loadAll(projectName)
+    local all, readError = tracknotes.loadAll(projectName)
+    if readError then return false, readError end
     if type(all[trackName]) ~= "table" then return false end
     local kept = {}
     local removed = false
@@ -446,7 +451,11 @@ end
 
 local function refreshTrack(trackName)
     if not _webview or not _project then return end
-    local all = tracknotes.loadAll(_project)
+    local all, readError = tracknotes.loadAll(_project)
+    if readError then
+        HSMakeAlert(programName, L("notes_load_failed"), true, "warning")
+        return
+    end
     local notes = all[trackName] or {}
     local nj  = escSQ(notesJson(notes))
     local tj  = escSQ(trackListJson(all))
@@ -463,7 +472,11 @@ end
 
 local function refreshView(projectName, preferredTrack)
     if not _webview then return end
-    local all = tracknotes.loadAll(projectName)
+    local all, readError = tracknotes.loadAll(projectName)
+    if readError then
+        HSMakeAlert(programName, L("notes_load_failed"), true, "warning")
+        return
+    end
     local selectedTrack = chooseInitialTrack(all, preferredTrack)
     local html = buildHTML(projectName, selectedTrack, all)
     _webview:html(html)
@@ -474,9 +487,14 @@ end
 --- Open (or focus) the track notes panel.
 function openTrackNotes()
     local project = _G.trackname or "unsaved_project"
+    if _webview then notecontext.cancel(_webview) end
+    local all, readError = tracknotes.loadAll(project)
+    if readError then
+        HSMakeAlert(programName, L("notes_load_failed"), true, "warning")
+        return
+    end
 
     if _webview ~= nil then
-        notecontext.cancel(_webview)
         if _project ~= project then
             local currentWebview, previousProject = _webview, _project
             notecontext.confirm(currentWebview, function()
@@ -492,7 +510,6 @@ function openTrackNotes()
         return
     end
 
-    local all = tracknotes.loadAll(project)
     _project = project
     _track = chooseInitialTrack(all, detectTrackName())
 

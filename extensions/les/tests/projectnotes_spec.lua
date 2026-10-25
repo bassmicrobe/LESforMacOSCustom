@@ -61,6 +61,29 @@ end
 describe("project notes storage", function()
     before_each(clearNotes)
 
+    it("does not overwrite damaged JSON when a new note is added", function()
+        local path = TEST_DIR .. "/notes/fixture.json"
+        local file = assert(io.open(path, "w"))
+        assert(file:write("{damaged"))
+        assert(file:close())
+        assert.is_false(projectnotes.addNote("fixture", "new note"))
+        local stored = assert(io.open(path, "r"))
+        assert.are.equal("{damaged", stored:read("*a"))
+        assert(stored:close())
+        local entries = 0
+        for name in lfs.dir(TEST_DIR .. "/notes") do
+            if name ~= "." and name ~= ".." then entries = entries + 1 end
+        end
+        assert.are.equal(1, entries)
+    end)
+
+    it("ignores non-finite and unrepresentable note timestamps", function()
+        local file = assert(io.open(TEST_DIR .. "/notes/fixture.json", "w"))
+        assert(file:write(' [{"timestamp":"1e309","body":"bad"},{"timestamp":"1e30","body":"bad"}] '))
+        assert(file:close())
+        assert.has_no.errors(function() assert.same({}, projectnotes.load("fixture")) end)
+    end)
+
     it("assigns stable legacy ids while sanitizing records", function()
         local legacy = TEST_DIR .. "/notes/fixture.json"
         local file = assert(io.open(legacy, "wb"))

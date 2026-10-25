@@ -59,6 +59,8 @@ local strings = {
     notes_delete_confirm      = "Delete this note?",
     notes_deleted             = "Deleted.",
     notes_delete_failed       = "Failed to delete.",
+    notes_load_failed         = "Could not read the saved notes. Nothing was overwritten. Check file permissions or restore a backup.",
+    favorites_save_failed     = "Could not save favorites. The previous state has been kept. Check file permissions and free disk space.",
     notes_context_confirm     = "This project has an unsaved note. Discard it and switch projects?",
     notes_context_busy        = "Wait for the current operation to finish before switching projects.",
     notes_context_failed      = "Could not switch projects safely. The current note and project have been kept. Try again.",
@@ -451,6 +453,10 @@ Happy producing.]],
     notes_delete_confirm      = "このメモを削除しますか？",
     notes_deleted             = "削除しました",
     notes_delete_failed       = "削除に失敗しました",
+    notes_load_failed         = "保存済みメモを読み込めませんでした。元データは上書きしていません。"
+        .. "ファイルの権限を確認するか、バックアップから復元してください。",
+    favorites_save_failed     = "お気に入りを保存できませんでした。変更前の状態を保持しています。"
+        .. "ファイルの権限とディスクの空き容量を確認してください。",
     notes_context_confirm     = "このプロジェクトに未保存のメモがあります。"
         .. "破棄して別のプロジェクトに切り替えますか？",
     notes_context_busy        = "操作が完了してからプロジェクトを切り替えてください。",

@@ -202,7 +202,10 @@ local function openFavoritesChooser(allChoices)
             openPluginChooser()
             return
         end
-        pluginStats.toggleFavorite(choice.plugin)
+        local _, saveError = pluginStats.toggleFavorite(choice.plugin)
+        if saveError then
+            HSMakeAlert(programName, L("favorites_save_failed"), true, "warning")
+        end
         -- Reopen with refreshed state
         hs.timer.doAfter(0.05, function()
             favChooser:choices(buildFavChoices())

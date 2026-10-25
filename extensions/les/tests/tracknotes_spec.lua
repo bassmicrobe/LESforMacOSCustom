@@ -70,6 +70,24 @@ describe("track notes storage", function()
         end
     end)
 
+    it("does not overwrite damaged JSON when adding a track note", function()
+        local path = writeLegacy("fixture", "{damaged")
+        assert.is_false(tracknotes.addNote("fixture", "Lead", "new note"))
+        local stored = assert(io.open(path, "r"))
+        assert.are.equal("{damaged", stored:read("*a"))
+        assert(stored:close())
+        local entries = 0
+        for name in lfs.dir(TEST_DIR .. "/tracknotes") do
+            if name ~= "." and name ~= ".." then entries = entries + 1 end
+        end
+        assert.are.equal(1, entries)
+    end)
+
+    it("ignores non-finite and unrepresentable track-note timestamps", function()
+        writeLegacy("fixture", '{"Lead":[{"ts":"1e309","body":"bad"},{"ts":"1e30","body":"bad"}]}')
+        assert.has_no.errors(function() assert.same({Lead = {}}, tracknotes.loadAll("fixture")) end)
+    end)
+
     it("sanitizes malformed on-disk records before exposing them", function()
         writeLegacy("fixture", [[{
           "Lead": [

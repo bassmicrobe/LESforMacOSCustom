@@ -52,7 +52,7 @@ rawset(_G, "HSMakeAlert", function() end)
 
 local secureFileCalls = 0
 local secureDirCalls = 0
-rawset(_G, "SetSecureFileMode", function() secureFileCalls = secureFileCalls + 1 end)
+rawset(_G, "SetSecureFileMode", function() secureFileCalls = secureFileCalls + 1 return true end)
 rawset(_G, "SetSecureDirMode", function() secureDirCalls = secureDirCalls + 1 end)
 
 -- panicExit must be observable: record the message instead of killing busted
@@ -148,7 +148,7 @@ describe("settingsManager", function()
                 end
                 return iterator, state, nil, state
             end } })
-            rawset(_G, "SetSecureFileMode", function(path) secured[path] = true end)
+            rawset(_G, "SetSecureFileMode", function(path) secured[path] = true return true end)
             local ok, result = pcall(settingsManager.init, settingsManager)
             rawset(_G, "hs", originalHS)
             rawset(_G, "SetSecureFileMode", originalSecure)

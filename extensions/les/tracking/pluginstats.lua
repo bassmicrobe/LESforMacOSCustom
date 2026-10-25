@@ -5,167 +5,191 @@
 --
 --  Distributed under the MIT software license, see the accompanying
 --  file COPYING.txt or visit https://opensource.org/license/mit/
-
------------------------------------------
---  Plugin Usage Statistics Tracker    --
---  Tracks add date, last use, count   --
---  Stored as JSON in ~/.les/resources --
------------------------------------------
+--
+-- Validated, cached plugin statistics with coalesced usage writes.
 
 local pluginStats = {}
-
 local STATS_FILE = "plugin_stats.json"
-
---- Get the full path to the stats file.
----@return string
-local function statsFilePath()
-    return strJoinPaths(ScriptUserResourcesPath, STATS_FILE)
-end
-
--- Short-TTL read cache. openPluginChooser() and the AI summary call load()
--- several times in quick succession; re-reading + JSON-decoding the file each
--- time is wasteful (#37). Mutators (save) refresh this, and Hammerspoon runs
--- single-threaded on the run loop, so within-TTL reads stay consistent.
-local _statsCache = nil
-local _statsCacheTime = -1
 local STATS_CACHE_TTL = 2
+local _statsCache, _statsCacheTime, _statsCacheError = nil, -1, nil
+local _pendingUses, _flushScheduled = nil, false
 
-local function _now()
-    return (hs and hs.timer and hs.timer.secondsSinceEpoch and hs.timer.secondsSinceEpoch()) or 0
+local function now()
+    return hs.timer.secondsSinceEpoch()
 end
 
---- Load stats from disk. Returns a table keyed by plugin name.
----@return table<string, {added_at: number, last_used_at: number, use_count: number}>
-function pluginStats.load()
-    local now = _now()
-    if _statsCache ~= nil and (now - _statsCacheTime) < STATS_CACHE_TTL then
-        return _statsCache
-    end
-    local path = statsFilePath()
-    local data = {}
-    local f = io.open(path, "r")
-    if f then
-        local raw = f:read("*a")
-        f:close()
-        if raw and raw ~= "" then
-            local ok, decoded = pcall(hs.json.decode, raw)
-            if ok and type(decoded) == "table" then data = decoded end
+local function count(value)
+    local number = tonumber(value)
+    if not number or number ~= number or number < 0 or number == math.huge then return 0 end
+    return math.tointeger(math.floor(number)) or 0
+end
+
+local function timestamp(value)
+    local number = count(value)
+    if number == 0 then return 0 end
+    return pcall(os.date, "%Y", number) and number or 0
+end
+
+local function copyEntry(entry)
+    return {
+        added_at = timestamp(entry.added_at),
+        last_used_at = timestamp(entry.last_used_at),
+        use_count = count(entry.use_count),
+        favorited = entry.favorited == true,
+    }
+end
+
+local function snapshot(data)
+    local result = {}
+    for name, entry in pairs(data) do
+        if type(name) == "string" and name ~= "" and type(entry) == "table" then
+            result[name] = copyEntry(entry)
         end
     end
-    _statsCache = data
-    _statsCacheTime = now
-    return data
+    return result
 end
 
---- Save stats table to disk.
----@param data table
+local function readDisk()
+    local file, _, code = io.open(strJoinPaths(ScriptUserResourcesPath, STATS_FILE), "r")
+    if not file then
+        if code == 2 then return {} end -- ENOENT: first use, not a damaged file.
+        return {}, "statistics file is unreadable"
+    end
+    local raw = file:read("*a")
+    local closed = file:close()
+    if not raw or raw == "" or not closed then return {}, "statistics file could not be read" end
+    local ok, decoded = pcall(hs.json.decode, raw)
+    if not ok or type(decoded) ~= "table" then return {}, "statistics JSON is invalid" end
+    return snapshot(decoded)
+end
+
+local function cached()
+    local current = now()
+    if _statsCache == nil or current < _statsCacheTime or current - _statsCacheTime >= STATS_CACHE_TTL then
+        _statsCache, _statsCacheError = readDisk()
+        _statsCacheTime = current
+    end
+    return _statsCache, _statsCacheError
+end
+
+--- Return an independent snapshot; callers cannot mutate cached state.
+function pluginStats.load()
+    local data, err = cached()
+    return snapshot(data), err
+end
+
+--- Commit cache changes only after the complete file is safely replaced.
+---@return boolean ok
+---@return string|nil err
 function pluginStats.save(data)
+    if type(data) ~= "table" then return false, "statistics must be a table" end
+    local updated = snapshot(data)
+    local encoded, json = pcall(hs.json.encode, updated, true)
+    if not encoded or type(json) ~= "string" then return false, "statistics encoding failed" end
     ShellCreateDirectory(ScriptUserResourcesPath)
-    local path = statsFilePath()
-    -- Guard the encode (nil on a bad table would otherwise truncate the file)
-    -- and write atomically via a temp file + rename.
-    local ok, json = pcall(hs.json.encode, data, true)
-    if not ok or type(json) ~= "string" then return end
-    local tmp = path .. ".tmp"
-    local f = io.open(tmp, "w")
-    if not f then return end
-    f:write(json)
-    if not f:close() then
-        os.remove(tmp)
+    local path = strJoinPaths(ScriptUserResourcesPath, STATS_FILE)
+    local tempPath = path .. ".tmp"
+    local file = io.open(tempPath, "w")
+    if not file then return false, "statistics temporary file could not be opened" end
+    local written = file:write(json)
+    local closed = file:close()
+    if not written or not closed then
+        local removed = os.remove(tempPath)
+        if not removed then print("[pluginstats] unable to remove failed temporary file") end
+        return false, "statistics write failed"
+    end
+    local renamed = os.rename(tempPath, path)
+    if not renamed then
+        local removed = os.remove(tempPath)
+        if not removed then print("[pluginstats] unable to remove uncommitted temporary file") end
+        return false, "statistics replacement failed"
+    end
+    _statsCache, _statsCacheTime, _statsCacheError = updated, now(), nil
+    return true
+end
+
+local function validName(name)
+    return type(name) == "string" and name ~= ""
+end
+
+local function flushUses()
+    local pending = _pendingUses
+    _pendingUses, _flushScheduled = nil, false
+    local current, readError = cached()
+    if readError then
+        print("[pluginstats] usage not saved: " .. readError)
         return
     end
-    if os.rename(tmp, path) then
-        -- Keep the read cache consistent with what was just persisted (#37).
-        _statsCache = data
-        _statsCacheTime = _now()
+    local updated = snapshot(current)
+    while pending do
+        local entry = updated[pending.name]
+        updated[pending.name] = {
+            added_at = entry and math.min(entry.added_at, pending.time) or pending.time,
+            last_used_at = math.max(entry and entry.last_used_at or 0, pending.time),
+            use_count = math.min(entry and entry.use_count or 0, math.maxinteger - 1) + 1,
+            favorited = entry and entry.favorited == true or false,
+        }
+        pending = pending.previous
+    end
+    local saved, err = pluginStats.save(updated)
+    if not saved then print("[pluginstats] usage not saved: " .. tostring(err)) end
+end
+
+--- One next-tick write for a burst; enqueue without copying the entire history.
+function pluginStats.recordUse(pluginName)
+    if not validName(pluginName) then return end
+    _pendingUses = {name = pluginName, time = math.floor(now()), previous = _pendingUses}
+    if _flushScheduled then return end
+    _flushScheduled = true
+    local scheduled = pcall(hs.timer.doAfter, 0, flushUses)
+    if not scheduled then
+        _flushScheduled = false
+        _pendingUses = nil
+        print("[pluginstats] unable to schedule usage update")
     end
 end
 
---- Record a plugin use event.
---- Creates entry if first time, updates last_used_at and increments use_count.
----@param pluginName string  The display name of the plugin
-function pluginStats.recordUse(pluginName)
-    if not pluginName or pluginName == "" then return end
-    -- Defer the read/modify/write off the plugin-insertion hot path (it runs
-    -- from loadPlugin on every insert). The return value is never used, so
-    -- running on the next run-loop tick costs nothing and removes the
-    -- synchronous file I/O latency from the user's click.
-    hs.timer.doAfter(0, function()
-        local data = pluginStats.load()
-        local now = math.floor(hs.timer.secondsSinceEpoch())
-        local entry = data[pluginName]
-        if entry then
-            entry.last_used_at = now
-            entry.use_count = (entry.use_count or 0) + 1
-        else
-            data[pluginName] = {
-                added_at     = now,
-                last_used_at = now,
-                use_count    = 1,
-            }
-        end
-        pluginStats.save(data)
-    end)
-end
-
---- Get stats for a single plugin. Returns nil if not tracked.
----@param pluginName string
----@return table|nil
 function pluginStats.get(pluginName)
-    local data = pluginStats.load()
-    return data[pluginName]
+    local data = cached()
+    return data[pluginName] and copyEntry(data[pluginName]) or nil
 end
 
---- Get all stats.
----@return table
 function pluginStats.getAll()
     return pluginStats.load()
 end
 
---- Toggle favorite status for a plugin.
---- Creates an entry if none exists. Returns new favorite state.
----@param pluginName string
----@return boolean
+--- Return the persisted state and, on failure, a separate error.
 function pluginStats.toggleFavorite(pluginName)
-    if not pluginName or pluginName == "" then return false end
-    local data = pluginStats.load()
-    local now = math.floor(hs.timer.secondsSinceEpoch())
-    local entry = data[pluginName]
-    if entry then
-        entry.favorited = not entry.favorited
-    else
-        data[pluginName] = {
-            added_at     = now,
-            last_used_at = 0,
-            use_count    = 0,
-            favorited    = true,
-        }
-    end
-    pluginStats.save(data)
-    return data[pluginName].favorited
+    if not validName(pluginName) then return false, "invalid plugin name" end
+    local current, readError = cached()
+    local entry = current[pluginName]
+    local previous = entry and entry.favorited == true or false
+    if readError then return previous, readError end
+    local updated = snapshot(current)
+    updated[pluginName] = {
+        added_at = entry and entry.added_at or math.floor(now()),
+        last_used_at = entry and entry.last_used_at or 0,
+        use_count = entry and entry.use_count or 0,
+        favorited = not previous,
+    }
+    local saved, err = pluginStats.save(updated)
+    if not saved then return previous, err end
+    return not previous
 end
 
---- Check if a plugin is favorited.
----@param pluginName string
----@return boolean
 function pluginStats.isFavorite(pluginName)
-    local data = pluginStats.load()
-    local entry = data[pluginName]
-    return entry ~= nil and entry.favorited == true
+    local data = cached()
+    return data[pluginName] ~= nil and data[pluginName].favorited == true
 end
 
---- Get all favorited plugin names, sorted alphabetically.
----@return table
 function pluginStats.getFavorites()
-    local data = pluginStats.load()
-    local favs = {}
+    local data = cached()
+    local favorites = {}
     for name, entry in pairs(data) do
-        if entry.favorited == true then
-            favs[#favs + 1] = name
-        end
+        if entry.favorited then favorites[#favorites + 1] = name end
     end
-    table.sort(favs)
-    return favs
+    table.sort(favorites)
+    return favorites
 end
 
 return pluginStats

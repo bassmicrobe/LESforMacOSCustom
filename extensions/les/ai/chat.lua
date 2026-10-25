@@ -12,7 +12,9 @@ local _webview = nil
 ---@type hs.webview.usercontent|nil
 local _uc = nil
 local _requestGeneration = 0
+local _requestPending = false
 local MAX_INPUT_LENGTH = 8000
+local MAX_HISTORY = 20
 
 -- Conversation history (reset on window close)
 local _messages = {}
@@ -204,10 +206,11 @@ function removeTyping() {
     var t = document.getElementById('typing');
     if (t) t.remove();
 }
-function onReply() {
+function onReply(ok, failedText) {
     sending = false;
     var inp = document.getElementById('inp');
     inp.disabled = false;
+    if (ok === false) { inp.value = failedText || ''; resizeTA(inp); }
     document.getElementById('sendBtn').disabled = false;
     inp.focus();
 }
@@ -271,6 +274,7 @@ end
 --- Handle a user message: call OpenAI and push reply to webview.
 ---@param text string
 local function handleSend(text)
+    if _requestPending then return end
     if type(text) ~= "string" then return end
     text = text:match("^%s*(.-)%s*$") or ""
     if text == "" or not utf8text.isWithinLimit(text, MAX_INPUT_LENGTH) then
@@ -285,34 +289,35 @@ local function handleSend(text)
     _requestGeneration = _requestGeneration + 1
     local requestGeneration = _requestGeneration
     local requestWebview = _webview
-    _messages[#_messages + 1] = { role = "user", content = text }
-
-    -- Cap retained history so each request doesn't grow without bound (rising
-    -- token cost and eventual context-length failures). Keep the most recent
-    -- MAX_HISTORY messages; the system prompt is always re-added in
-    -- buildSystemMessages() below.
-    local MAX_HISTORY = 20
-    while #_messages > MAX_HISTORY do
-        table.remove(_messages, 1)
-    end
+    _requestPending = true
 
     local apiMessages = buildSystemMessages()
     for _, m in ipairs(_messages) do
         apiMessages[#apiMessages + 1] = m
     end
+    apiMessages[#apiMessages + 1] = { role = "user", content = text }
 
     openai.chat(apiMessages, function(reply, err)
         if _webview ~= requestWebview or _requestGeneration ~= requestGeneration then
             print("[LES][ai.chat] stale reply dropped")
             return
         end
+        _requestPending = false
         if err or type(reply) ~= "string" or reply == "" then
             local errMsg = err and L("ai_request_failed") or L("ai_empty_response")
             print("[LES][ai.chat] reply error: " .. tostring(err or "empty response"))
             _webview:evaluateJavaScript(string.format(
-                "removeTyping(); addMessage('error','%s'); onReply();", jsEscape(errMsg)))
+                "removeTyping(); addMessage('error','%s'); onReply(false,'%s');", jsEscape(errMsg), jsEscape(text)))
         else
-            _messages[#_messages + 1] = { role = "assistant", content = reply }
+            -- Retain only completed turns. Failed retries must not duplicate
+            -- user messages in the next request or increase its token cost.
+            local history = {}
+            for i = math.max(1, #_messages - MAX_HISTORY + 3), #_messages do
+                history[#history + 1] = _messages[i]
+            end
+            history[#history + 1] = {role = "user", content = text}
+            history[#history + 1] = {role = "assistant", content = reply}
+            _messages = history
             _webview:evaluateJavaScript(string.format(
                 "removeTyping(); addMessage('assistant','%s'); onReply();", jsEscape(reply)))
         end
@@ -322,6 +327,7 @@ end
 --- Toggle the AI chat assistant window.
 function chat.toggle()
     if _webview ~= nil then
+        _requestPending = false
         _requestGeneration = _requestGeneration + 1
         local closingWebview = _webview
         _webview = nil
@@ -331,6 +337,7 @@ function chat.toggle()
     end
 
     _requestGeneration = _requestGeneration + 1
+    _requestPending = false
     _messages = {}
 
     _uc = hs.webview.usercontent.new("aichat")
@@ -348,6 +355,7 @@ function chat.toggle()
             handleSend(body.text)
         elseif body.action == "clear" then
             _requestGeneration = _requestGeneration + 1
+            _requestPending = false
             _messages = {}
         end
     end)
@@ -372,6 +380,7 @@ function chat.toggle()
     _webview:windowCallback(function(action)
         if action == "closing" and _webview == currentWebview then
             _requestGeneration = _requestGeneration + 1
+            _requestPending = false
             _webview = nil
             _uc = nil
         end

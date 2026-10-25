@@ -213,6 +213,7 @@ describe("IO utilities", function()
             fileToTable(testFile, result)
             assert.are.equal(3, #result)
             assert.are.equal("alpha", result[1])
+            if lfs_ok then assert.are.equal("rw-------", lfs.attributes(testFile, "permissions")) end
         end)
     end)
 end)

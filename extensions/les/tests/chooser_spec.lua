@@ -4,13 +4,17 @@ package.path = package.path .. ";extensions/les/?.lua"
 local function harness()
     local choosers = {}
     local reads, loaded = 0, 0
+    local alerts = {}
     local stats = {
         getAll = function() reads = reads + 1 return {} end,
         getFavorites = function() return {"Synth"} end,
+        isFavorite = function() return false end,
+        toggleFavorite = function() return false, "write failed" end,
     }
     local env = setmetatable({
         menu = {{title = "音源 › 鍵盤", menu = {{title = "Synth", fn = function() loaded = loaded + 1 end}}}},
         hs = {
+            timer = {doAfter = function(_, callback) callback() end},
             chooser = {new = function(callback)
                 local chooser = {callback = callback}
                 function chooser:choices(value) self.items = value return self end
@@ -24,16 +28,29 @@ local function harness()
                 return chooser
             end},
         },
+        L = function(key) return key end,
+        HSMakeAlert = function(_, message) alerts[#alerts + 1] = message end,
         require = function(name)
             if name == "tracking.pluginstats" then return stats end
             return require(name)
         end,
     }, {__index = _G})
     assert(loadfile("extensions/les/menus/chooser.lua", "t", env))()
-    return {env = env, choosers = choosers, reads = function() return reads end, loaded = function() return loaded end}
+    return {env = env, choosers = choosers, alerts = alerts,
+        reads = function() return reads end, loaded = function() return loaded end}
 end
 
 describe("plugin chooser", function()
+    it("reports favorite save failures and keeps the persisted favorite state", function()
+        local state = harness()
+        state.env.openPluginChooser()
+        state.choosers[1].callback(state.choosers[1].items[3])
+        local favorites = state.choosers[2]
+        favorites.callback(favorites.items[1])
+        assert.same({"favorites_save_failed"}, state.alerts)
+        assert.are.equal("☆ Synth", favorites.items[1].text)
+    end)
+
     it("keeps Japanese category names intact and filters the matching plugins", function()
         local state = harness()
         state.env.openPluginChooser()
