@@ -1,150 +1,70 @@
-<div align="center">
-  <img src="https://raw.githubusercontent.com/LiveEnhancementSuite/LESforMacOS/develop/Hammerspoon/Images.xcassets/AppIcon.appiconset/icon_256x256.png" alt="Live Enhancement Suite Custom"/>
-  <br/>
-  <a href="https://github.com/bassmicrobe/LESforMacOSCustom/tree/develop">
-    <img src="https://github.com/bassmicrobe/LESforMacOSCustom/actions/workflows/les_build.yml/badge.svg" alt="ビルドステータス">
-  </a>
-  <br/>
-</div>
-
 # LESforMacOS Custom
 
-> **これは [LESforMacOS](https://github.com/LiveEnhancementSuite/LESforMacOS) のフォーク（派生版）です。**
-> オリジナルの Live Enhancement Suite をベースに、カスタマイズや改良を加えています。
+**Ableton Live の操作をショートカットとマクロで拡張する macOS アプリです。**
 
-LESforMacOS Custom は Live Enhancement Suite Custom の macOS 版です。[Hammerspoon](https://github.com/Hammerspoon/hammerspoon) のフォークであり、Hammerspoon を活用した [Lua スクリプト](https://github.com/bassmicrobe/LESforMacOSCustom/tree/develop/extensions/les)を内蔵しています。Ableton Live の操作を便利にするショートカットやマクロを提供し、音楽制作のワークフローを向上させます。
+## 概要
 
-## クイックスタート
+[LESforMacOS](https://github.com/LiveEnhancementSuite/LESforMacOS) のフォークです。アプリ名は **Live Enhancement Suite Custom** で、[Hammerspoon](https://github.com/Hammerspoon/hammerspoon) 上の [Lua スクリプト](extensions/les) により Ableton Live の操作を拡張します。
 
-1. [最新リリース](https://github.com/bassmicrobe/LESforMacOSCustom/releases/latest)をダウンロード
-2. `LiveEnhancementSuiteCustom.dmg` を開き、指示に従ってインストール
-3. [ユーザマニュアル](docs/USER_MANUAL.md)で使い方を確認
-
-### 動作要件
-
-| 項目 | 最低要件 |
-|------|---------|
-| macOS | 12 (Monterey) 以上 |
-| Ableton Live | 10 〜 12 |
-
-## 主な機能
+Ableton Live が前面にあるときだけショートカットが有効になり、他のアプリに切り替えると自動で無効化されます。
 
 | 機能 | 説明 | デフォルトキー |
 |------|------|---------------|
-| ピアノロールマクロ | ピアノロール操作の自動化 | `` ` ``（バッククォート） |
-| MIDIクリップ作成 | 新規MIDIクリップを素早く作成 | `Cmd+Shift+M` |
+| ピアノロールマクロ | ピアノロール操作の自動化 | `` ` `` |
+| MIDIクリップ作成 | 新規 MIDI クリップを作成 | `Cmd+Shift+M` |
 | プロジェクトバージョニング | 新バージョンとして保存 | `Cmd+Alt+S` |
 | マーカー作成 | ロケーターマーカーを作成 | `Shift+L` |
 | ウィンドウ管理 | 前面または全プラグインウィンドウを閉じる | `Cmd+W` / `Cmd+Alt+W` |
-| カスタムメニュー | メニューバーからの操作 | メニューバーアイコン |
-| プラグイン検索 | Spotlight 風プラグイン検索 + お気に入り | `Cmd+Shift+H` |
-| プラグインメニュー設定 | カテゴリ別のプラグインメニューを GUI で編集 | メニューバー |
-| プラグインスキャン | VST3 / AU を自動検出してメニューを生成 | メニューバー |
-| プロジェクトメモ | プロジェクト単位のタイムライン形式メモ | メニューバー |
-| トラックメモ | トラック単位のメモ（トラック名の自動検出対応） | メニューバー |
-| ショートカット一覧 | 全ショートカットのオーバーレイ表示 | `Cmd+Shift+/` |
-| AI アシスタント | 音楽制作 AI チャット (OpenAI) | `Cmd+Shift+A` |
-| AI プラグイン提案 | 使用統計ベースのプラグイン推薦 | メニューバー |
-| AI トラック名生成 | トラック名を AI が提案 | メニューバー |
+| プラグイン検索 | Spotlight 風検索とお気に入り | `Cmd+Shift+H` |
+| ショートカット一覧 | 全ショートカットのオーバーレイ | `Cmd+Shift+/` |
+| AI アシスタント | 音楽制作向けチャット（OpenAI） | `Cmd+Shift+A` |
+| カスタムメニュー | メニューバーからの操作 | メニューバー |
+| プラグインメニュー設定 | カテゴリ別メニューを GUI で編集 | メニューバー |
+| プラグインスキャン | VST3 / AU を検出してメニューを生成 | メニューバー |
+| プロジェクトメモ | プロジェクト単位のタイムラインメモ | メニューバー |
+| トラックメモ | トラック単位のメモ | メニューバー |
+| AI プラグイン提案 | 使用統計ベースの推薦 | メニューバー |
+| AI トラック名生成 | トラック名の提案 | メニューバー |
 | macOS 通知連携 | エクスポート完了 / 作業時間通知 | 自動 |
 
-### 設定
+オリジナル LES との差分は [機能比較表](docs/FEATURE_COMPARISON.md) を参照してください。
 
-設定ファイルは `~/.les/settings.ini` に保存されます。主な設定項目：
+## 技術スタック
 
-- `autoadd` — プラグイン検索後に自動追加
-- `disableloop` — ループボタンの自動有効化を無効化
-- `saveasnewver` — Cmd+Alt+S でバージョン保存
-- `enabledebug` — デバッグコンソールを有効化
-- `texticon` — メニューバーにテキスト "LES" を表示
-- `loadspeed` — プラグイン挿入時の待機速度
-- `language` — UI 言語（`ja` / `en`）
-- `openaikey` / `openaimodel` — AI 機能で使う OpenAI API キー / モデル（設定 → AI 設定 で入力）
+- Lua 5.4.7（`LuaSkin/lua-5.4.7/` に組み込み。LES スクリプトロジック）
+- Objective-C（Hammerspoon コア）
+- C++（LuaSkin・ネイティブ拡張）
+- Python 3（ドキュメント生成。Jinja2 / mistune / pygments）
+- Xcode 14.1 以上 / CocoaPods
+- Docker + [busted](https://github.com/lunarmodules/busted) + luacheck（Lua テスト・静的解析）
 
-> API キーを含む設定ファイルはパーミッション `600`（所有者のみ読み書き可）で保存されます。
+## セットアップ
 
-## プロジェクト構成
+### 動作要件
 
-```
-LESforMacOSCustom/
-├── Hammerspoon/              # コアアプリケーション (Objective-C)
-├── LuaSkin/                  # Lua ランタイムラッパー
-│   └── lua-5.4.7/            # 組み込み Lua インタープリター
-├── extensions/               # Hammerspoon 拡張モジュール (94+)
-│   └── les/                  # ★ Live Enhancement Suite Custom 本体
-│       ├── LESmain.lua       # エントリーポイント
-│       ├── module.lua        # モジュール管理
-│       ├── helpers.lua       # ファイル操作ヘルパー
-│       ├── proccom.lua       # プロセス検出・メニュー操作
-│       ├── settings.lua      # 設定システム
-│       ├── ai/               # AI 機能 (OpenAI API 連携)
-│       ├── shortcuts/        # キーボードショートカット
-│       ├── menus/            # メニューバー UI・設定 GUI
-│       ├── ui/               # チートシート・HUD
-│       ├── lifecycle/        # リロード・アプリ監視
-│       ├── tracking/         # タイマー・通知・プロジェクト/トラックメモ・プラグイン統計
-│       ├── vst/              # VST プラグイン操作
-│       └── tests/            # busted テストスイート
-├── Pods/                     # CocoaPods 依存関係
-├── Hammerspoon.xcworkspace/  # Xcode ワークスペース
-├── Dockerfile.test           # テスト実行環境 (Docker)
-├── CLAUDE.md                 # Claude Code プロジェクトコンテキスト
-├── CHANGELOG.md              # 変更履歴
-├── LICENSE                   # MIT ライセンス
-└── README.md                 # このファイル
-```
+| 項目 | 要件 |
+|------|------|
+| macOS | 12 (Monterey) 〜 26 |
+| Ableton Live | 9 〜 15 |
 
-## ビルド方法
+### インストール
 
-### 前提条件
+1. [最新リリース](https://github.com/bassmicrobe/LESforMacOSCustom/releases/latest) から `LiveEnhancementSuiteCustom.dmg` をダウンロードする
+2. DMG を開き、指示に従ってインストールする
+3. アプリを起動し、**システム設定 → プライバシーとセキュリティ → アクセシビリティ** で許可する
 
-- **Xcode** 14.1 以上（Apple Developer アカウントが必要）
-- **Homebrew**
-- **CocoaPods**
-- **Ruby** 3.x
+### ソースからビルド
 
-### 1. 依存パッケージのインストール
-
-```bash
-# Homebrew パッケージ
-brew install coreutils jq xcbeautify gawk gh gpg
-
-# Ruby gems
-gem install --user t
-gem install trainer
-```
-
-### 2. リポジトリのクローンとセットアップ
+前提は **Xcode 14.1 以上**（Apple Developer アカウントが必要）、**Homebrew**、**CocoaPods**、**Ruby 3.x** です。
 
 ```bash
 git clone https://github.com/bassmicrobe/LESforMacOSCustom
 cd LESforMacOSCustom
-
-# CocoaPods 依存関係のインストール
 pod install
-
-# Python 依存関係のインストール
 python3 -m pip install --user --require-hashes -r requirements.txt
 ```
 
-### 3. ビルドと配布
-
-開発からリリースまでの全体の流れ：
-
-```
-ソースコード
-  │
-  ├─ [開発用] デバッグビルド → .app → そのまま起動して動作確認
-  │
-  └─ [配布用] リリースビルド → .app → DMG に梱包 → .dmg をユーザーに配布
-                                  │                      │
-                                  └─ Developer ID 署名・Apple 公証（配布時必須）
-                                     Gatekeeper 検証後にのみ公開
-```
-
-#### デバッグビルド（開発用）
-
-コンパイルして `.app` を生成し、動作確認に使います：
+デバッグビルド:
 
 ```bash
 XCODE_ARGS="GCC_TREAT_WARNINGS_AS_ERRORS=NO MACOSX_DEPLOYMENT_TARGET=12.0"
@@ -152,181 +72,63 @@ xcodebuild -workspace Hammerspoon.xcworkspace -scheme Hammerspoon \
   -configuration Debug ${XCODE_ARGS} clean build | xcbeautify
 ```
 
-既存プロセスを終了してすぐ起動するショートカット：
+Lua テスト（Docker）:
 
 ```bash
-./rebuild.sh
-```
-
-#### リリースビルド → DMG 作成（配布用）
-
-**方法 A: ワンコマンド**
-
-```bash
-# ビルド→検証→公証→アーカイブを一括実行
-./scripts/release.sh
-```
-
-**方法 B: 手動ステップ**
-
-```bash
-# ① ビルド（Release 構成で .app を生成）
-./scripts/build.sh clean
-./scripts/build.sh docs
-./scripts/build.sh build -s Release -c Release
-./scripts/build.sh validate
-
-# ② DMG に梱包（署名・公証済み .app をインストーラーに変換）
-mkdir -p release
-cp -R ~/Library/Developer/Xcode/DerivedData/*/Build/Products/Release/*.app/ \
-  "./Live Enhancement Suite Custom.app/"
-
-hdiutil create -volname "Live Enhancement Suite Custom" \
-  -srcfolder "Live Enhancement Suite Custom.app" \
-  -ov -format UDZO release/LiveEnhancementSuite.dmg
-shasum -a 256 release/LiveEnhancementSuite.dmg > release/LiveEnhancementSuite.dmg.sha256sum
-```
-
-`release/LiveEnhancementSuite.dmg` が配布用インストーラーです。
-
-#### Apple 公証（公開配布時は必須）
-
-App Store 外で配布する場合、macOS Gatekeeper に「安全なアプリ」と認識させるため公証を行います：
-
-```bash
-# 公証用プロファイルの設定（初回のみ）
-xcrun notarytool store-credentials -v \
-  --apple-id YOUR_APPLE_ID \
-  --team-id YOUR_TEAM_ID \
-  --password APP_SPECIFIC_PASSWORD
-
-# 公証の実行（DMG 作成前に行う）
-./scripts/build.sh notarize
-```
-
-#### GitHub Actions による自動リリース
-
-`release` Environment に次の Secrets を設定してください：
-
-- `MACOS_CERTIFICATE_P12_BASE64`
-- `MACOS_CERTIFICATE_PASSWORD`
-- `MACOS_KEYCHAIN_PASSWORD`
-- `APPLE_TEAM_ID`
-- `APPLE_ID`
-- `APPLE_APP_PASSWORD`
-
-`v*` 形式のタグをプッシュすると、Developer ID 署名、公証、staple、Gatekeeper 検証、DMG 公証がすべて成功した場合に限り GitHub Actions が公開します。Secrets が未設定、または検証が失敗した場合は公開しません：
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-# → 自動で: リリースビルド → DMG 作成 → GitHub Releases にアップロード
-```
-
-ワークフローの詳細: [`.github/workflows/les_release.yml`](.github/workflows/les_release.yml)
-
-## テスト
-
-Docker を使ってローカル環境を汚さずにテストを実行できます。
-
-```bash
-# イメージをビルドして全テスト実行（luacheck + busted）
 docker build -f Dockerfile.test -t les-test .
 docker run --rm les-test
-
-# busted テストのみ
-docker run --rm les-test busted extensions/les/tests/
-
-# luacheck 静的解析のみ
-docker run --rm les-test luacheck extensions/les/
-
-# コンテナ内でシェルを開く
-docker run --rm -it les-test /bin/sh
 ```
 
-Docker イメージには以下が含まれます：
-- **Lua 5.4** + **busted**（テストフレームワーク）+ **luacheck**（静的解析）
-- **Node.js 22** + **pnpm**（JS ツールチェーン用）
+依存関係のインストール、リリースビルド、公証、GitHub Actions による配布、テストの詳細は [開発・ビルドガイド](docs/BUILD.md) を参照してください。
 
-テストファイルは `extensions/les/tests/` に `*_spec.lua` の命名規則で配置します。
+## 使い方
+
+Ableton Live が前面にあるときだけショートカットが有効になります。他のアプリに切り替えると自動で無効化されます。`Cmd+Shift+1` で一時停止／再開できます。
+
+設定は `~/.les/settings.ini` に保存されます（メニューバーの設定 GUI でも変更できます）。OpenAI API キーを含む設定ファイルはパーミッション `600`（所有者のみ読み書き可）で保存されます。
+
+ショートカット・設定項目の詳細は [ユーザマニュアル](docs/USER_MANUAL.md) を参照してください。
+
+## 構成
+
+```
+LESforMacOSCustom/
+├── Hammerspoon/              # コアアプリケーション (Objective-C)
+├── LuaSkin/                  # Lua ランタイムラッパー
+│   └── lua-5.4.7/            # 組み込み Lua
+├── extensions/               # Hammerspoon 拡張モジュール
+│   └── les/                  # Live Enhancement Suite Custom 本体
+│       ├── LESmain.lua       # エントリーポイント
+│       ├── settings.lua      # 設定システム
+│       ├── ai/               # AI 機能 (OpenAI API)
+│       ├── shortcuts/        # キーボードショートカット
+│       ├── menus/            # メニューバー UI・設定 GUI
+│       ├── tracking/         # タイマー・通知・メモ・統計
+│       └── tests/            # busted テスト
+├── docs/                     # ドキュメント
+├── scripts/                  # ビルド・リリース・テスト
+├── Hammerspoon.xcworkspace/  # Xcode ワークスペース
+├── Dockerfile.test           # Lua テスト用 Docker
+└── LICENSE                   # MIT ライセンス
+```
+
+設定とジャンプスタート用の `init.lua` は `~/.les` に置かれ、コアロジックはアプリバンドル内の `Contents/Resources/extensions/hs/les`（ソースツリーでは `extensions/les`）にあります。
 
 ## ドキュメント
 
-- **[ユーザマニュアル](docs/USER_MANUAL.md)** — 全機能の使い方・ショートカット一覧・設定リファレンス
-- **[機能比較表](docs/FEATURE_COMPARISON.md)** — オリジナル LES との機能差分
-- **[変更履歴](CHANGELOG.md)** — このフォークでの変更点
+- [ユーザマニュアル](docs/USER_MANUAL.md) — インストール、ショートカット、設定リファレンス
+- [機能比較表](docs/FEATURE_COMPARISON.md) — オリジナル LES との差分
+- [アーキテクチャ](docs/ARCHITECTURE.md) — GUI・モジュール構成・データフロー
+- [開発・ビルドガイド](docs/BUILD.md) — 依存関係、ビルド、公証、テスト
+- [変更履歴](CHANGELOG.md) — このフォークでの変更点
 
-## コントリビューション
+## ライセンス
 
-LESforMacOS へのコントリビューションは、Hammerspoon フォーク部分と LES スクリプト部分の両方で受け付けています。
+MIT License。再配布・改変の際は、各パーツの著作権表示と MIT ライセンス本文を含めてください。
 
-既存の Hammerspoon ユーザーにとっては、`~/.hammerspoon` がアプリケーションバンドル内に組み込まれていると考えるとわかりやすいです。
+- LES スクリプト（`extensions/les/`）— [COPYING.txt](extensions/les/COPYING.txt) / [AUTHORS.txt](extensions/les/AUTHORS.txt)
+- Hammerspoon コア（`Hammerspoon/`、`LuaSkin/` など）— ルート [LICENSE](LICENSE)
+- 組み込み Lua（`LuaSkin/lua-5.4.7/`）— [Lua.org / PUC-Rio](https://www.lua.org/)
+- 本フォークの追加・改変 — MIT License（ルート [LICENSE](LICENSE) に従う）
 
-LESforMacOS は設定ファイルとジャンプスタートスクリプト（Hammerspoon コアをアプリケーションバンドル内のロジックにリダイレクトする `init.lua`）を `~/.les` に保存しますが、コアロジックは `Contents/Resources/extensions/hs/les` にあります。
-
-ソースツリーでは `extensions/les` に対応します。
-
-## ライセンスと著作権
-
-**Acknowledgements.** The maintainers of this fork are deeply grateful to the authors and contributors of [Live Enhancement Suite for macOS](https://github.com/LiveEnhancementSuite/LESforMacOS) for designing and sharing a powerful workflow for Ableton Live users; to everyone who has contributed to [Hammerspoon](https://github.com/Hammerspoon/hammerspoon), on whose foundation this application is built; and to [Lua.org / PUC-Rio](https://www.lua.org/) for the Lua language and runtime that powers the embedded scripting layer. Their generosity under open licenses makes projects like this one possible, and we thank them sincerely.
-
-本リポジトリは **MIT License** のコンポーネントを組み合わせたものです。再配布・改変の際は、各パーツの **著作権表示（Copyright notice）** と **MIT ライセンス本文（Permission notice 全文）** をドキュメントや頒布物に含めてください。
-
-- **LES スクリプト**（`extensions/les/`）— オリジナルは [LESforMacOS](https://github.com/LiveEnhancementSuite/LESforMacOS)。著作者一覧は [extensions/les/AUTHORS.txt](extensions/les/AUTHORS.txt)。条項はリポジトリ内 [`extensions/les/COPYING.txt`](extensions/les/COPYING.txt) と同一の全文を以下に記載します。
-- **Hammerspoon アプリ本体**（`Hammerspoon/`、`LuaSkin/` などコア）— ルート [`LICENSE`](LICENSE) と同一の全文を以下に記載します。
-- **組み込み Lua**（`LuaSkin/lua-5.4.7/`）— [Lua.org / PUC-Rio](https://www.lua.org/) の著作。条項は同梱の `LuaSkin/lua-5.4.7/doc/readme.html` 等を参照してください。
-- **本フォークの追加・改変**（`Copyright (c) 2026 bassmicrobe` 等）— 上記と同様に **MIT License** の条件のもとで提供します（条項は下記「MIT License」本文に従います）。
-
-### `extensions/les` — `COPYING.txt` と同一（著作権 + MIT 全文）
-
-```
-MIT License
-
-Copyright (c) 2019-2023 LESforMacOS authors, see AUTHORS.txt for a list
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-### Hammerspoon コア — ルート `LICENSE` と同一（著作権 + MIT 全文）
-
-```
-The MIT License (MIT)
-
-Copyright (c) 2014-2017 [Various Contributors](https://github.com/Hammerspoon/hammerspoon/graphs/contributors)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-```
-
-上記のほか、個別ファイルの SPDX ヘッダや `extensions/utf8/LICENSE` など、サブディレクトリに含まれるライセンス表記も条件に従ってください。
+オリジナルの [Live Enhancement Suite for macOS](https://github.com/LiveEnhancementSuite/LESforMacOS)、[Hammerspoon](https://github.com/Hammerspoon/hammerspoon)、[Lua](https://www.lua.org/) の作者・貢献者に感謝します。
