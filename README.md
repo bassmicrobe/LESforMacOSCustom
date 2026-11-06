@@ -44,12 +44,14 @@ Ableton Live が前面にあるときだけショートカットが有効にな�
 
 | 項目 | 要件 |
 |------|------|
-| macOS | 12 (Monterey) 〜 26 |
-| Ableton Live | 9 〜 15 |
+| macOS | 12 (Monterey) 〜 27（27.2で起動確認） |
+| Ableton Live | 9 〜 12（実機確認: Live 12 Suite 12.4.7） |
+
+このMacではmacOS 27.2とLive 12 Suite 12.4.7でLESの起動とLiveの検出を確認しています。Live 9〜11の実機検証は行っていません。
 
 ### インストール
 
-1. [最新リリース](https://github.com/bassmicrobe/LESforMacOSCustom/releases/latest) から `LiveEnhancementSuiteCustom.dmg` をダウンロードする
+1. [最新リリース](https://github.com/bassmicrobe/LESforMacOSCustom/releases/latest) から、バージョン番号を含む `LiveEnhancementSuiteCustom-…-universal.dmg` をダウンロードする（ZIP版も利用可能）
 2. DMG を開き、指示に従ってインストールする
 3. アプリを起動し、**システム設定 → プライバシーとセキュリティ → アクセシビリティ** で許可する
 

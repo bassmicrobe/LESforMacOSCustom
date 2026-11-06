@@ -18,8 +18,8 @@ programBugTracker = "https://github.com/LiveEnhancementSuite/LESforMacOS/issues"
 -- macOS Monterey
 programMinTarget = 12
 
--- macOS Tahoe
-programMaxTarget = 26
+-- macOS 27 (startup verified on 27.2)
+programMaxTarget = 27
 
 -- Platform specific constants
 PATH_DELIMITER = "/"
@@ -29,4 +29,4 @@ ARGS_DELIMITER = " "
 targetName = "Live"
 targetBundle = "com.ableton.live"
 targetMinVersion = 9
-targetMaxVersion = 15
+targetMaxVersion = 12
