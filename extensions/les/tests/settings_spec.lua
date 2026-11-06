@@ -52,7 +52,11 @@ rawset(_G, "HSMakeAlert", function() end)
 
 local secureFileCalls = 0
 local secureDirCalls = 0
-rawset(_G, "SetSecureFileMode", function() secureFileCalls = secureFileCalls + 1 end)
+local secureFilePaths = {}
+rawset(_G, "SetSecureFileMode", function(path)
+    secureFileCalls = secureFileCalls + 1
+    secureFilePaths[#secureFilePaths + 1] = path
+end)
 rawset(_G, "SetSecureDirMode", function() secureDirCalls = secureDirCalls + 1 end)
 
 -- panicExit must be observable: record the message instead of killing busted
@@ -75,6 +79,20 @@ end
 --- Simulate quitting and restarting LES: re-read settings.ini from disk.
 local function simulateRestart()
     settingsManager:init()
+end
+
+-- hs.fs.dir returns a stateful iterator and a Lua 5.4 closing value, unlike
+-- closure-only mocks which cannot detect a missing directory userdata.
+local function statefulDirectory(entries)
+    local directory = setmetatable({ index = 0, closed = false }, {
+        __close = function(state) state.closed = true end,
+    })
+    local function iterate(state)
+        assert.are.equal(directory, state, "directory iterator must receive its state")
+        state.index = state.index + 1
+        return entries[state.index]
+    end
+    return iterate, directory, nil, directory
 end
 
 -- ── Tests ─────────────────────────────────────────────────────────────
@@ -100,6 +118,86 @@ describe("settingsManager", function()
 
             assert.is_true(secureFileCalls > 0)
             assert.is_true(secureDirCalls > 0)
+        end)
+
+        describe("stateful directory iteration", function()
+            local originalFs
+            local backupPaths
+
+            before_each(function()
+                originalFs = hs.fs
+                backupPaths = {}
+            end)
+
+            after_each(function()
+                rawset(hs, "fs", originalFs)
+                for _, path in ipairs(backupPaths) do os.remove(path) end
+            end)
+
+            it("secures retained settings backups and closes the directory", function()
+                local directory
+                rawset(hs, "fs", { dir = function(path)
+                    assert.are.equal(TEST_DIR, path)
+                    local iter, state, initial, close = statefulDirectory({
+                        ".", "..", "settings.ini", "settings_1000000.ini", "settings_2000000.ini",
+                        "settings_old.ini", "notes_123.ini",
+                    })
+                    directory = state
+                    return iter, state, initial, close
+                end })
+                secureFilePaths = {}
+
+                simulateRestart()
+
+                assert.same({
+                    TEST_DIR .. "/settings.ini",
+                    TEST_DIR .. "/settings_1000000.ini",
+                    TEST_DIR .. "/settings_2000000.ini",
+                }, secureFilePaths)
+                assert.is_true(directory.closed)
+            end)
+
+            it("keeps the five newest backups while backfilling settings", function()
+                local entries = {}
+                for epoch = 1000000, 1000006 do
+                    local name = "settings_" .. epoch .. ".ini"
+                    local path = TEST_DIR .. "/" .. name
+                    local file = assert(io.open(path, "w"))
+                    assert(file:write("backup\n"))
+                    assert(file:close())
+                    entries[#entries + 1] = name
+                    backupPaths[#backupPaths + 1] = path
+                end
+                local directories = {}
+                rawset(hs, "fs", { dir = function()
+                    local existing = {}
+                    for _, name in ipairs(entries) do
+                        if ioIsFilePresent(TEST_DIR .. "/" .. name) then
+                            existing[#existing + 1] = name
+                        end
+                    end
+                    local iter, state, initial, close = statefulDirectory(existing)
+                    directories[#directories + 1] = state
+                    return iter, state, initial, close
+                end })
+
+                freshInit()
+
+                assert.is_false(ioIsFilePresent(backupPaths[1]))
+                assert.is_false(ioIsFilePresent(backupPaths[2]))
+                for index = 3, 7 do assert.is_true(ioIsFilePresent(backupPaths[index])) end
+                assert.is_true(#directories >= 3)
+                for _, directory in ipairs(directories) do assert.is_true(directory.closed) end
+                assert.are.equal(1, settingsManager:getVal("autoadd"))
+            end)
+
+            it("still loads valid settings when directory enumeration is unavailable", function()
+                rawset(hs, "fs", { dir = function() error("cannot open directory") end })
+
+                simulateRestart()
+
+                assert.are.equal(1, settingsManager:getVal("autoadd"))
+            end)
         end)
     end)
 

@@ -33,7 +33,7 @@ local function createHarness(options)
     }
 
     local hsMock = {
-        fs = {},
+        fs = options.fs or {},
         json = {
             decode = function() return decodedMessage end,
         },
@@ -112,8 +112,8 @@ local function createHarness(options)
         ScriptUserPath = FIXTURE_DIR,
         programName = "LES Test",
         HSMakeAlert = function() end,
-        ShellCopy = function() return true end,
-        ioIsFilePresent = function() return false end,
+        ShellCopy = options.copy or function() return true end,
+        ioIsFilePresent = function() return options.existingMenuConfig == true end,
         strJoinPaths = function(left, right) return left .. "/" .. right end,
         buildPluginMenu = function()
             liveBuildCalls = liveBuildCalls + 1
@@ -167,6 +167,13 @@ local function readSource()
 end
 
 describe("menu configuration editor lifecycle", function()
+    local backupPaths = {}
+
+    after_each(function()
+        for _, path in ipairs(backupPaths) do os.remove(path) end
+        backupPaths = {}
+    end)
+
     it("keeps the editor open after saving so later edits cannot be discarded by a close timer", function()
         local harness = createHarness()
         harness.environment.openMenuConfigGUI()
@@ -251,5 +258,60 @@ describe("menu configuration editor lifecycle", function()
 
         assert.is_truthy(lastScript(webview):find("Saved.", 1, true))
         assert.is_nil(lastScript(webview):match("[ぁ-んァ-ン一-龯]"))
+    end)
+
+    it("saves with a stateful directory iterator and retains only five backups", function()
+        local entries = {}
+        for epoch = 100, 106 do
+            local name = "menuconfig.ini." .. epoch .. ".bak"
+            local path = FIXTURE_DIR .. "/" .. name
+            assert(os.execute("mkdir -p " .. FIXTURE_DIR))
+            local file = assert(io.open(path, "w"))
+            assert(file:write("old backup\n"))
+            assert(file:close())
+            entries[#entries + 1] = name
+            backupPaths[#backupPaths + 1] = path
+        end
+        entries[#entries + 1] = "menuconfig.ini.123.bak"
+        backupPaths[#backupPaths + 1] = FIXTURE_PATH .. ".123.bak"
+        local directory = setmetatable({ index = 0, closed = false }, {
+            __close = function(state) state.closed = true end,
+        })
+        local harness = createHarness({
+            existingMenuConfig = true,
+            fs = { dir = function(path)
+                assert.are.equal(FIXTURE_DIR, path)
+                return function(state)
+                    assert.are.equal(directory, state, "directory iterator must receive its state")
+                    state.index = state.index + 1
+                    return entries[state.index]
+                end, directory, nil, directory
+            end },
+            copy = function(source, destination)
+                local input = assert(io.open(source, "r"))
+                local content = assert(input:read("*a"))
+                assert(input:close())
+                local output = assert(io.open(destination, "w"))
+                assert(output:write(content))
+                assert(output:close())
+                return true
+            end,
+        })
+        harness.environment.openMenuConfigGUI()
+
+        harness.callback()({ body = "save" })
+
+        assert.is_true(directory.closed)
+        assert.are.equal(1, harness.liveBuildCalls())
+        assert.is_truthy(lastScript(harness.webviews[1]):find("保存しました", 1, true))
+        for index, path in ipairs(backupPaths) do
+            local file = io.open(path, "r")
+            if index <= 3 then
+                assert.is_nil(file, "oldest backup should be removed")
+            else
+                assert.is_not_nil(file, "newest backup should be retained")
+                assert(file:close())
+            end
+        end
     end)
 end)

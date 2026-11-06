@@ -23,10 +23,10 @@ local function writeMenuConfig(content)
         local backupPath = string.format("%s.%d.bak", path, math.floor(hs.timer.secondsSinceEpoch()))
         ShellCopy(path, backupPath)
         -- Index hs.fs inside the pcall closure so a missing hs.fs is caught.
-        local ok, iter = pcall(function() return hs.fs.dir(ScriptUserPath) end)
+        local ok, iter, dirObj, initial, closeObj = pcall(function() return hs.fs.dir(ScriptUserPath) end)
         if ok and iter then
             local baks = {}
-            for file in iter do
+            for file in iter, dirObj, initial, closeObj do
                 if type(file) == "string" and file:match("^menuconfig%.ini%.%d+%.bak$") then
                     baks[#baks + 1] = file
                 end

@@ -310,9 +310,9 @@ local function secureSettingsFiles()
   -- Older versions created timestamped backups using the default umask. Secure
   -- every retained backup as well so an API key cannot remain group-readable.
   if type(SetSecureFileMode) == "function" then
-    local ok, iter = pcall(function() return hs.fs.dir(ScriptUserPath) end)
+    local ok, iter, dirObj, initial, closeObj = pcall(function() return hs.fs.dir(ScriptUserPath) end)
     if ok and iter then
-      for file in iter do
+      for file in iter, dirObj, initial, closeObj do
         if type(file) == "string" and file:match("^settings_%d+%.ini$") then
           SetSecureFileMode(strJoinPaths(ScriptUserPath, file))
         end
@@ -383,10 +383,10 @@ function settingsManager.init(self, _depth)
       -- Keep only the 5 most recent settings_<epoch>.ini backups. Index hs.fs
       -- INSIDE the pcall closure so a missing hs.fs (e.g. test env) is caught
       -- rather than thrown while evaluating the argument.
-      local ok, iter = pcall(function() return hs.fs.dir(ScriptUserPath) end)
+      local ok, iter, dirObj, initial, closeObj = pcall(function() return hs.fs.dir(ScriptUserPath) end)
       if ok and iter then
         local backups = {}
-        for file in iter do
+        for file in iter, dirObj, initial, closeObj do
           if type(file) == "string" and file:match("^settings_%d+%.ini$") then
             backups[#backups + 1] = file
           end
